@@ -1,0 +1,9 @@
+data/
+*.wav
+*.json
+!dataset-metadata.json
+kaggle.json
+.env
+__pycache__/
+*.pyc
+.DS_Store

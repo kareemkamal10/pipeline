@@ -1,0 +1,7 @@
+yt-dlp
+demucs
+whisperx
+torch
+torchaudio
+kaggle
+faster-whisper
