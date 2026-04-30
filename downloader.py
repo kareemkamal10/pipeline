@@ -13,19 +13,16 @@ from tracker import Tracker
 
 
 def extract_playlist_id(url: str) -> str:
-    """استخراج playlist ID من الرابط"""
     match = re.search(r"list=([A-Za-z0-9_-]+)", url)
     if match:
         return match.group(1)
-    # رابط فيديو عادي — نعامله كـ playlist ID = video ID
     match = re.search(r"v=([A-Za-z0-9_-]+)", url)
     if match:
         return match.group(1)
-    # إذا مفيش pattern واضح — نستخدم الرابط كـ ID مختصر
     return re.sub(r"[^A-Za-z0-9_-]", "_", url)[-32:]
 
 
-def download_session(session: str, playlist_urls: list[str], base_dir: str = "./data"):
+def download_session(session: str, playlist_urls: list, base_dir: str = "./data"):
     tracker = Tracker(session, base_dir)
     audio_dir = Path(base_dir) / session / "raw_audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
@@ -33,12 +30,10 @@ def download_session(session: str, playlist_urls: list[str], base_dir: str = "./
     print(f"\n▶ Session: {session}")
     print(f"  Playlists received: {len(playlist_urls)}")
 
-    # تسجيل الـ playlists في الـ tracker
     for url in playlist_urls:
         pid = extract_playlist_id(url)
         tracker.add_playlist(pid, url)
 
-    # فحص ما تم تحميله بالفعل
     pending = tracker.get_pending_download()
     if not pending:
         print("\n✔ All playlists already downloaded — nothing to do.")
@@ -51,7 +46,6 @@ def download_session(session: str, playlist_urls: list[str], base_dir: str = "./
         print(f"\n━━━ Downloading playlist: {playlist_id}")
         print(f"  URL: {url}")
 
-        # مسار خاص بكل playlist
         pl_dir = audio_dir / playlist_id
         pl_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,10 +65,10 @@ def download_session(session: str, playlist_urls: list[str], base_dir: str = "./
                 "preferredcodec": "wav",
                 "preferredquality": "0",
             }],
-            "postprocessor_args": [
-                "-ar", "44100",
-                "-ac", "1",
-            ],
+            # FIX: postprocessor_args must be a dict keyed by postprocessor name
+            "postprocessor_args": {
+                "FFmpegExtractAudio": ["-ar", "44100", "-ac", "1"]
+            },
             "ignoreerrors": True,
             "quiet": False,
             "progress_hooks": [progress_hook],

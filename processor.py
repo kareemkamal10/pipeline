@@ -3,9 +3,11 @@ processor.py — المرحلة الثانية (GPU)
 Demucs vocal isolation + WhisperX transcription
 """
 
-import os
 import json
+import shutil
+import subprocess
 import time
+import traceback
 from pathlib import Path
 
 import torch
@@ -35,9 +37,8 @@ def process_session(session: str, base_dir: str = "./data"):
 
     print(f"  Pending process: {len(pending)} playlist(s)")
 
-    # تحميل النماذج مرة واحدة
-    print("\n▶ Loading models...")
-    demucs_model  = _load_demucs(device)
+    # تحميل نماذج WhisperX مرة واحدة
+    print("\n▶ Loading WhisperX models...")
     whisper_model, align_model, align_meta = _load_whisperx(device, compute_type)
     print("  ✔ Models loaded")
 
@@ -46,6 +47,8 @@ def process_session(session: str, base_dir: str = "./data"):
         wav_files    = sorted(pl_audio_dir.glob("*.wav"))
         print(f"\n━━━ Processing playlist: {playlist_id} ({len(wav_files)} files)")
 
+        failed = 0
+
         for wav_path in wav_files:
             video_id = wav_path.stem
 
@@ -53,21 +56,24 @@ def process_session(session: str, base_dir: str = "./data"):
                 print(f"  ⏭ Skip: {video_id}")
                 continue
 
-            print(f"  🎙 {video_id}")
+            print(f"\n  🎙 {video_id}")
             t0 = time.time()
 
             try:
-                # ── Step 1: Demucs vocal isolation ─────────
+                # ── Step 1: Demucs via CLI (يدعم الملفات الطويلة) ──
                 vocals_path = vocals_dir / f"{video_id}.wav"
                 if not vocals_path.exists():
-                    _run_demucs(demucs_model, wav_path, vocals_path, device)
+                    print(f"    ▶ Demucs...")
+                    _run_demucs(wav_path, vocals_path)
 
-                # ── Step 2: WhisperX transcription ─────────
+                # ── Step 2: WhisperX ────────────────────────────────
                 json_out = trans_dir / f"{video_id}.json"
                 txt_out  = trans_dir / f"{video_id}.txt"
 
                 if not json_out.exists():
+                    print(f"    ▶ WhisperX...")
                     import whisperx
+
                     audio = whisperx.load_audio(str(vocals_path))
 
                     result = whisper_model.transcribe(
@@ -81,6 +87,7 @@ def process_session(session: str, base_dir: str = "./data"):
                         },
                     )
 
+                    print(f"    ▶ Aligning {len(result['segments'])} segments...")
                     result_aligned = whisperx.align(
                         result["segments"],
                         align_model, align_meta,
@@ -88,9 +95,11 @@ def process_session(session: str, base_dir: str = "./data"):
                         return_char_alignments=False,
                     )
 
+                    # حفظ JSON (word-level timestamps)
                     with open(json_out, "w", encoding="utf-8") as f:
                         json.dump(result_aligned, f, ensure_ascii=False, indent=2)
 
+                    # حفظ TXT (النص الكامل)
                     full_text = " ".join(
                         s.get("text", "").strip()
                         for s in result_aligned.get("segments", [])
@@ -98,15 +107,24 @@ def process_session(session: str, base_dir: str = "./data"):
                     with open(txt_out, "w", encoding="utf-8") as f:
                         f.write(full_text)
 
+                    print(f"    ✔ Saved JSON + TXT ({len(full_text.split())} words)")
+
                 tracker.mark_video_processed(playlist_id, video_id)
-
                 elapsed = time.time() - t0
-                print(f"    ✔ {elapsed:.1f}s")
+                print(f"    ✔ Done in {elapsed:.1f}s")
 
-            except Exception as e:
-                print(f"    ✗ Error: {e}")
+            except Exception:
+                # FIX: طباعة الـ error الكامل بدلاً من إخفائه
+                print(f"    ✗ FAILED: {video_id}")
+                traceback.print_exc()
+                failed += 1
 
-        tracker.mark_playlist_processed(playlist_id)
+        # FIX: نضع playlist كـ processed فقط لو كل الملفات نجحت
+        if failed == 0:
+            tracker.mark_playlist_processed(playlist_id)
+            print(f"\n  ✔ Playlist {playlist_id} fully processed")
+        else:
+            print(f"\n  ⚠ Playlist {playlist_id} had {failed} failed files — will retry on next run")
 
     tracker.summary()
     print("\n✔ Processing complete — run: upload")
@@ -114,29 +132,33 @@ def process_session(session: str, base_dir: str = "./data"):
 
 # ── Helpers ─────────────────────────────────────────────────
 
-def _load_demucs(device):
-    from demucs.pretrained import get_model
-    model = get_model("htdemucs_ft")
-    model.to(device)
-    model.eval()
-    return model
+def _run_demucs(wav_path: Path, out_path: Path):
+    """
+    FIX: استخدام Demucs CLI بدلاً من apply_model مباشرة
+    يدعم الملفات الطويلة تلقائياً بالـ chunking
+    """
+    tmp_dir = out_path.parent / f"demucs_tmp_{wav_path.stem}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
+    try:
+        subprocess.run([
+            "python", "-m", "demucs",
+            "--two-stems", "vocals",
+            "-n", "htdemucs_ft",
+            "--out", str(tmp_dir),
+            str(wav_path)
+        ], check=True)
 
-def _run_demucs(model, wav_path: Path, out_path: Path, device: str):
-    import torchaudio
-    from demucs.apply import apply_model
-    from demucs.audio import save_audio
+        # Demucs يحفظ هنا: tmp_dir/htdemucs_ft/FILENAME/vocals.wav
+        vocal_files = list(tmp_dir.rglob("vocals.wav"))
+        if not vocal_files:
+            raise FileNotFoundError(f"Demucs output not found in {tmp_dir}")
 
-    wav, sr = torchaudio.load(str(wav_path))
-    if wav.shape[0] == 1:
-        wav = wav.repeat(2, 1)
-    wav = wav.unsqueeze(0).to(device)
+        shutil.move(str(vocal_files[0]), str(out_path))
+        print(f"    ✔ Vocals saved: {out_path.name}")
 
-    with torch.no_grad():
-        sources = apply_model(model, wav, device=device)[0]
-
-    vocals = sources[3].mean(0, keepdim=True).cpu()
-    save_audio(vocals, str(out_path), samplerate=sr)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _load_whisperx(device, compute_type):
