@@ -5,3 +5,4 @@ torch
 torchaudio
 kaggle
 faster-whisper
+ffmpeg-python
