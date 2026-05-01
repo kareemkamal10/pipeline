@@ -7,3 +7,4 @@ kaggle.json
 __pycache__/
 *.pyc
 .DS_Store
+_tmp_download/
