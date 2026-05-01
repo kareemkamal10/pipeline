@@ -54,7 +54,7 @@ def cmd_process(args):
     
     from processor import process_session
     print("▶ المرحلة 2: process (يتطلب GPU)")
-    process_session(data_dir="data")
+    process_session(base_dir="data")
 
 
 def cmd_upload(args):

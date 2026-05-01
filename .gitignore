@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 .DS_Store
 _tmp_download/
+lightning_report/

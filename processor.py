@@ -178,38 +178,30 @@ def _segment_by_silence(audio_path: Path, min_silence_duration=0.5, sr=44100) ->
     """تقسيم الصوت عند التوقفات (الصمت)"""
     try:
         y, sr = librosa.load(str(audio_path), sr=sr)
-        
-        # اكتشف الصمت
-        S = librosa.feature.melspectrogram(y=y, sr=sr)
-        S_db = librosa.power_to_db(S, ref=np.max)
-        threshold = -40
-        is_silent = np.mean(S_db, axis=0) < threshold
-        
-        # استخرج الفترات
+
+        # Use a fixed hop_length to avoid relying on removed internals
+        hop_length = 512
+
+        # Use librosa.effects.split to get non-silent intervals (speech)
+        # top_db controls sensitivity; 40 ~= -40dB threshold
+        intervals = librosa.effects.split(y, top_db=40, hop_length=hop_length)
+
         segments = []
-        in_silence = False
-        start = 0
-        
-        frames = np.arange(len(is_silent))
-        hop_length = librosa.get_hop_length()
-        
-        for frame_idx, silent in enumerate(is_silent):
-            if silent and not in_silence:
-                in_silence = True
-                start = frame_idx
-            elif not silent and in_silence:
-                end_frame = frame_idx
-                if (end_frame - start) * hop_length / sr >= min_silence_duration:
-                    segments.append((start * hop_length / sr, end_frame * hop_length / sr))
-                in_silence = False
-        
-        # إذا لم توجد توقفات، قسم الصوت إلى أجزاء متساوية
+        for start_sample, end_sample in intervals:
+            start_sec = start_sample / sr
+            end_sec = end_sample / sr
+            # skip too-short segments
+            if end_sec - start_sec < 0.3:
+                continue
+            segments.append((start_sec, end_sec))
+
+        # If no segments detected, fallback to fixed-size chunks
         if not segments:
             duration = len(y) / sr
             segment_length = 30
-            segments = [(i * segment_length, min((i+1) * segment_length, duration)) 
+            segments = [(i * segment_length, min((i+1) * segment_length, duration))
                        for i in range(int(np.ceil(duration / segment_length)))]
-        
+
         return segments
     except Exception as e:
         print(f"  ✗ فشل التقسيم: {e}")
