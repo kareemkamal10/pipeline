@@ -83,27 +83,40 @@ def download_and_convert(video_urls, out_dir="data/raw_audio"):
     shutil.rmtree(tmp_dir)
     print("\n✔ انتهى! ستجد ملفات wav فقط في:", out_dir)
 
+
+def download_from_csv(csv_path, out_dir="data/raw_audio"):
+    """Read playLinks.csv, apply exclusions, and download all playlists."""
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        print(f"✗ ملف {csv_path} غير موجود!")
+        return
+
+    all_links = read_links_and_excludes(csv_path)
+    if not all_links:
+        print("✗ لم يتم العثور على روابط في الملف!")
+        return
+
+    for playlist_url, excludes in all_links:
+        print(f"\n=== معالجة قائمة التشغيل: {playlist_url}")
+        videos = get_playlist_video_ids(playlist_url)
+        found_ids = set(vid for vid, _ in videos)
+
+        for ex in excludes:
+            if ex not in found_ids:
+                print(f"  ⚠️ لم يتم العثور على الفيديو المستثنى: {ex}")
+
+        filtered = [(vid, url) for vid, url in videos if vid not in excludes]
+        if not filtered:
+            print("  لا يوجد فيديوهات متاحة بعد الاستثناءات!")
+            continue
+
+        print(f"  سيتم تحميل {len(filtered)} فيديو...")
+        video_urls = [url for _, url in filtered]
+        download_and_convert(video_urls, out_dir)
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("استخدم: python downloader.py playLinks.csv")
         sys.exit(1)
     csv_path = sys.argv[1]
-    all_links = read_links_and_excludes(csv_path)
-    for playlist_url, excludes in all_links:
-        print(f"\n=== معالجة قائمة التشغيل: {playlist_url}")
-        videos = get_playlist_video_ids(playlist_url)
-        found_ids = set(vid for vid, _ in videos)
-        # تحقق من الاستثناءات غير الموجودة
-        for ex in excludes:
-            if ex not in found_ids:
-                print(f"  ⚠️ لم يتم العثور على الفيديو المستثنى: {ex}")
-        # استبعد الفيديوهات المطلوبة
-        filtered = [(vid, url) for vid, url in videos if vid not in excludes]
-        if not filtered:
-            print("  لا يوجد فيديوهات متاحة بعد الاستثناءات!")
-            continue
-        print(f"  سيتم تحميل {len(filtered)} فيديو...")
-        video_urls = [url for _, url in filtered]
-        # احفظ كل الملفات في مجلد واحد فقط: data/raw_audio
-        out_dir = Path("data") / "raw_audio"
-        download_and_convert(video_urls, out_dir)
+    download_from_csv(csv_path, Path("data") / "raw_audio")

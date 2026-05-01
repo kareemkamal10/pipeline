@@ -28,8 +28,8 @@ from pathlib import Path
 
 def cmd_download(args):
     """تحميل الملفات من YouTube"""
-    from downloader import download_and_convert
-    download_and_convert([args.csv_file])
+    from downloader import download_from_csv
+    download_from_csv(args.csv_file)
 
 
 def cmd_process(args):
