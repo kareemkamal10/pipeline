@@ -50,6 +50,22 @@ def download_and_convert(video_urls, out_dir="data/raw_audio"):
     import shutil
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # تصفية الفيديوهات المحملة مسبقاً
+    urls_to_download = []
+    for url in video_urls:
+        vid_id = url.split("v=")[-1].split("&")[0] if "v=" in url else None
+        if vid_id:
+            existing = out_dir / f"{vid_id}.wav"
+            if existing.exists() and existing.stat().st_size > 0:
+                print(f"  ↩ تجاوز التحميل ({vid_id}) — الملف موجود مسبقاً")
+                continue
+        urls_to_download.append(url)
+
+    if not urls_to_download:
+        print("  ✔ جميع الملفات محملة مسبقاً، لا يوجد شيء جديد.")
+        return
+
     tmp_dir = Path("./_tmp_download")
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
@@ -62,27 +78,27 @@ def download_and_convert(video_urls, out_dir="data/raw_audio"):
         "ignoreerrors": True,
         "quiet": False,
     }
-    print(f"\n▶ تحميل الصوت فقط في مجلد مؤقت ...")
+    print(f"\n▶ تحميل {len(urls_to_download)} فيديو في مجلد مؤقت ...")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download(video_urls)
+        ydl.download(urls_to_download)
 
     # تحويل كل ملف صوتي إلى wav في المجلد النهائي
     print(f"\n▶ تحويل الملفات الصوتية إلى wav ...")
     for audio_file in tmp_dir.iterdir():
-        if audio_file.suffix.lower() in [".wav"]:
+        if audio_file.suffix.lower() == ".wav":
             shutil.copy2(audio_file, out_dir / audio_file.name)
             continue
         wav_file = out_dir / f"{audio_file.stem}.wav"
         print(f"  تحويل {audio_file.name} → {wav_file.name}")
         try:
             subprocess.run([
-                "ffmpeg", "-y", "-i", str(audio_file), "-ar", "44100", "-ac", "1", str(wav_file)
+                "ffmpeg", "-y", "-i", str(audio_file),
+                "-ar", "44100", "-ac", "1", str(wav_file)
             ], check=True)
         except Exception as e:
             print(f"  ✗ فشل التحويل: {e}")
     shutil.rmtree(tmp_dir)
     print("\n✔ انتهى! ستجد ملفات wav فقط في:", out_dir)
-
 
 def download_from_csv(csv_path, out_dir="data/raw_audio"):
     """Read playLinks.csv, apply exclusions, and download all playlists."""

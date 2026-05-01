@@ -88,13 +88,16 @@ def _upload_tts_dataset(dataset_name: str, data_path: Path):
         print(f"  ✔ تم الرفع: {dataset_name}")
     except subprocess.CalledProcessError:
         # محاولة التحديث لو كان موجود
-        print(f"  تحديث الـ Dataset...")
-        subprocess.run([
-            "kaggle", "datasets", "version",
-            "-p", str(dataset_dir),
-            "-m", "تحديث جديد"
-        ], check=True)
-        print(f"  ✔ تم التحديث: {dataset_name}")
+        try:
+            print(f"  تحديث الـ Dataset...")
+            subprocess.run([
+                "kaggle", "datasets", "version",
+                "-p", str(dataset_dir),
+                "-m", "تحديث جديد"
+            ], check=True)
+            print(f"  ✔ تم التحديث: {dataset_name}")
+        except Exception as e:
+            print(f"  ✗ فشل التحديث: {e}")
     except Exception as e:
         print(f"  ✗ فشل الرفع: {e}")
 
@@ -140,12 +143,15 @@ def _upload_llm_dataset(dataset_name: str, data_path: Path):
         print(f"  ✔ تم الرفع: {dataset_name}")
     except subprocess.CalledProcessError:
         # محاولة التحديث
-        print(f"  تحديث الـ Dataset...")
-        subprocess.run([
-            "kaggle", "datasets", "version",
-            "-p", str(dataset_dir),
-            "-m", "تحديث جديد"
-        ], check=True)
-        print(f"  ✔ تم التحديث: {dataset_name}")
+        try:
+            print(f"  تحديث الـ Dataset...")
+            subprocess.run([
+                "kaggle", "datasets", "version",
+                "-p", str(dataset_dir),
+                "-m", "تحديث جديد"
+            ], check=True)
+            print(f"  ✔ تم التحديث: {dataset_name}")
+        except Exception as e:
+            print(f"  ✗ فشل التحديث: {e}")
     except Exception as e:
         print(f"  ✗ فشل الرفع: {e}")
