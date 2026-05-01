@@ -38,7 +38,22 @@ def cmd_download(args):
 
 def cmd_process(args):
     """معالجة الملفات (عزل + تقسيم + تفريغ)"""
+    # تحقق من المكتبات المطلوبة
+    required_libs = ["torch", "torchaudio", "librosa", "numpy"]
+    missing = []
+    for lib in required_libs:
+        try:
+            __import__(lib)
+        except ImportError:
+            missing.append(lib)
+    
+    if missing:
+        print(f"✗ المكتبات الناقصة: {', '.join(missing)}")
+        print(f"✓ شغّل: pip install -r requirements.txt")
+        sys.exit(1)
+    
     from processor import process_session
+    print("▶ المرحلة 2: process (يتطلب GPU)")
     process_session(data_dir="data")
 
 
