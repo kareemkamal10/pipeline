@@ -29,7 +29,11 @@ from pathlib import Path
 def cmd_download(args):
     """تحميل الملفات من YouTube"""
     from downloader import download_from_csv
-    download_from_csv(args.csv_file)
+    csv_path = Path(args.csv_file)
+    print("▶ المرحلة 1: download فقط")
+    print(f"  CWD: {Path.cwd()}")
+    print(f"  CSV: {csv_path.resolve() if csv_path.exists() else csv_path}")
+    download_from_csv(csv_path)
 
 
 def cmd_process(args):
