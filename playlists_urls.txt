@@ -1,6 +1,0 @@
-# ضع روابط قوائم التشغيل هنا — كل رابط في سطر
-# الأسطر التي تبدأ بـ # يتم تجاهلها
-
-# مثال:
-# https://www.youtube.com/playlist?list=PLxxxxxxxxxxxxxxxxxx
-# https://www.youtube.com/playlist?list=PLyyyyyyyyyyyyyyyyyy

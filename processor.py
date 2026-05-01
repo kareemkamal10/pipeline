@@ -1,6 +1,6 @@
 """
 processor.py — المرحلة الثانية (GPU)
-Demucs vocal isolation + WhisperX transcription
+عزل الصوت + تقسيم عند التوقفات + تفريغ + إنشاء metadata موحد
 """
 
 import json
@@ -11,135 +11,150 @@ import traceback
 from pathlib import Path
 
 import torch
+import torchaudio
+import librosa
+import numpy as np
 
-from tracker import Tracker
 
-
-def process_session(session: str, base_dir: str = "./data"):
-    tracker = Tracker(session, base_dir)
-
-    audio_dir  = Path(base_dir) / session / "raw_audio"
-    vocals_dir = Path(base_dir) / session / "vocals"
-    trans_dir  = Path(base_dir) / session / "transcripts"
-    vocals_dir.mkdir(parents=True, exist_ok=True)
-    trans_dir.mkdir(parents=True, exist_ok=True)
-
+def process_session(base_dir: str = "data"):
+    """
+    معالجة جميع الملفات الخام في data/raw_audio/:
+    1. عزل الصوت (Demucs)
+    2. تقسيم عند التوقفات
+    3. تفريغ المقاطع (WhisperX)
+    4. إنشاء metadata موحد للجلسة كاملة
+    """
+    data_path = Path(base_dir)
+    raw_audio_dir = data_path / "raw_audio"
+    
+    # إعداد مجلدات الإخراج
+    output_dirs = {
+        "vocals": data_path / "vocals",
+        "transcripts": data_path / "transcripts",
+        "fulltranscripts": data_path / "fulltranscripts",
+        "metadata": data_path / "metadata",
+    }
+    
+    for dir_path in output_dirs.values():
+        dir_path.mkdir(parents=True, exist_ok=True)
+    
+    if not raw_audio_dir.exists():
+        print(f"✗ مجلد raw_audio/ غير موجود في {data_path}")
+        return
+    
+    wav_files = sorted(raw_audio_dir.glob("*.wav"))
+    if not wav_files:
+        print("✗ لم يتم العثور على ملفات WAV في raw_audio/")
+        return
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
-    print(f"\n▶ Session: {session}")
+    print(f"\n▶ المعالجة")
     print(f"  Device: {device} | Compute: {compute_type}")
-
-    pending = tracker.get_pending_process()
-    if not pending:
-        print("\n✔ No playlists ready for processing.")
-        tracker.summary()
-        return
-
-    print(f"  Pending process: {len(pending)} playlist(s)")
-
+    print(f"  ملفات للمعالجة: {len(wav_files)}")
+    
     # تحميل نماذج WhisperX مرة واحدة
-    print("\n▶ Loading WhisperX models...")
+    print("\n▶ تحميل نماذج WhisperX...")
     whisper_model, align_model, align_meta = _load_whisperx(device, compute_type)
-    print("  ✔ Models loaded")
-
-    for playlist_id in pending:
-        pl_audio_dir = audio_dir / playlist_id
-        wav_files    = sorted(pl_audio_dir.glob("*.wav"))
-        print(f"\n━━━ Processing playlist: {playlist_id} ({len(wav_files)} files)")
-
-        failed = 0
-
-        for wav_path in wav_files:
-            video_id = wav_path.stem
-
-            if tracker.is_video_processed(playlist_id, video_id):
-                print(f"  ⏭ Skip: {video_id}")
+    print("  ✔ تم تحميل النماذج")
+    
+    all_metadata_samples = []
+    failed_videos = []
+    
+    for wav_path in wav_files:
+        video_id = wav_path.stem
+        print(f"\n━━━ معالجة: {video_id}")
+        t0 = time.time()
+        
+        try:
+            # الخطوة 1: عزل الصوت
+            print(f"  ▶ عزل الصوت (Demucs)...")
+            isolated_audio = _run_demucs(wav_path, output_dirs["vocals"] / f"{video_id}_isolated.wav")
+            
+            # الخطوة 2: تقسيم عند التوقفات
+            print(f"  ▶ تقسيم الصوت عند التوقفات...")
+            segments = _segment_by_silence(isolated_audio)
+            if not segments:
+                print(f"  ⚠ لم يتم العثور على مقاطع صوتية")
+                failed_videos.append(video_id)
                 continue
-
-            print(f"\n  🎙 {video_id}")
-            t0 = time.time()
-
-            try:
-                # ── Step 1: Demucs via CLI (يدعم الملفات الطويلة) ──
-                vocals_path = vocals_dir / f"{video_id}.wav"
-                if not vocals_path.exists():
-                    print(f"    ▶ Demucs...")
-                    _run_demucs(wav_path, vocals_path)
-
-                # ── Step 2: WhisperX ────────────────────────────────
-                json_out = trans_dir / f"{video_id}.json"
-                txt_out  = trans_dir / f"{video_id}.txt"
-
-                if not json_out.exists():
-                    print(f"    ▶ WhisperX...")
-                    import whisperx
-
-                    audio = whisperx.load_audio(str(vocals_path))
-
-                    result = whisper_model.transcribe(
-                        audio,
-                        batch_size=16,
-                        language="ar",
-                        vad_filter=True,
-                        vad_parameters={
-                            "min_silence_duration_ms": 500,
-                            "speech_pad_ms": 400,
-                        },
-                    )
-
-                    print(f"    ▶ Aligning {len(result['segments'])} segments...")
-                    result_aligned = whisperx.align(
-                        result["segments"],
-                        align_model, align_meta,
-                        audio, device,
-                        return_char_alignments=False,
-                    )
-
-                    # حفظ JSON (word-level timestamps)
-                    with open(json_out, "w", encoding="utf-8") as f:
-                        json.dump(result_aligned, f, ensure_ascii=False, indent=2)
-
-                    # حفظ TXT (النص الكامل)
-                    full_text = " ".join(
-                        s.get("text", "").strip()
-                        for s in result_aligned.get("segments", [])
-                    )
-                    with open(txt_out, "w", encoding="utf-8") as f:
-                        f.write(full_text)
-
-                    print(f"    ✔ Saved JSON + TXT ({len(full_text.split())} words)")
-
-                tracker.mark_video_processed(playlist_id, video_id)
-                elapsed = time.time() - t0
-                print(f"    ✔ Done in {elapsed:.1f}s")
-
-            except Exception:
-                # FIX: طباعة الـ error الكامل بدلاً من إخفائه
-                print(f"    ✗ FAILED: {video_id}")
-                traceback.print_exc()
-                failed += 1
-
-        # FIX: نضع playlist كـ processed فقط لو كل الملفات نجحت
-        if failed == 0:
-            tracker.mark_playlist_processed(playlist_id)
-            print(f"\n  ✔ Playlist {playlist_id} fully processed")
-        else:
-            print(f"\n  ⚠ Playlist {playlist_id} had {failed} failed files — will retry on next run")
-
-    tracker.summary()
-    print("\n✔ Processing complete — run: upload")
+            
+            # الخطوة 3: استخراج المقاطع
+            print(f"  ▶ استخراج المقاطع...")
+            segment_files = _extract_segments(isolated_audio, segments, output_dirs["vocals"], video_id)
+            
+            # الخطوة 4: تفريغ النصوص
+            print(f"  ▶ تفريغ المقاطع (WhisperX)...")
+            transcriptions = _transcribe_segments(segment_files, whisper_model, align_model, align_meta, device)
+            
+            # الخطوة 5: حفظ النصوص والـ metadata
+            full_text = []
+            for idx, segment_file, start_sec, end_sec in segment_files:
+                text = transcriptions.get(idx, {}).get("text", "")
+                
+                # حفظ النص لكل مقطع
+                text_file = output_dirs["transcripts"] / f"{video_id}_{idx:03d}.txt"
+                with open(text_file, "w", encoding="utf-8") as f:
+                    f.write(text)
+                
+                full_text.append(text)
+                
+                # جمع معلومات metadata
+                file_size = segment_file.stat().st_size
+                duration = end_sec - start_sec
+                all_metadata_samples.append({
+                    "video_id": video_id,
+                    "segment_id": idx,
+                    "audio_file": str(segment_file.relative_to(data_path)),
+                    "text_file": str(text_file.relative_to(data_path)),
+                    "duration_seconds": round(duration, 2),
+                    "file_size_bytes": file_size,
+                    "text": text,
+                })
+            
+            # حفظ النص الكامل
+            full_text_file = output_dirs["fulltranscripts"] / f"{video_id}.txt"
+            with open(full_text_file, "w", encoding="utf-8") as f:
+                f.write("\n".join(full_text))
+            
+            elapsed = time.time() - t0
+            print(f"  ✔ انتهت المعالجة ({len(segment_files)} مقاطع) — {elapsed:.1f}ث")
+            
+        except Exception as e:
+            print(f"  ✗ فشلت المعالجة: {e}")
+            traceback.print_exc()
+            failed_videos.append(video_id)
+    
+    # حفظ metadata الموحد
+    metadata_file = output_dirs["metadata"] / "tts_metadata.json"
+    total_duration = sum(s["duration_seconds"] for s in all_metadata_samples)
+    metadata = {
+        "dataset_name": "history_lab_tts",
+        "total_samples": len(all_metadata_samples),
+        "total_hours": round(total_duration / 3600, 2),
+        "samples": all_metadata_samples,
+    }
+    
+    with open(metadata_file, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    
+    print(f"\n✔ اكتملت المعالجة!")
+    print(f"   الملفات المنتجة:")
+    print(f"   - {len(all_metadata_samples)} مقطع صوتي/نصي")
+    print(f"   - {metadata['total_hours']:.1f} ساعة من الصوت")
+    print(f"   - metadata: {metadata_file}")
+    if failed_videos:
+        print(f"   ⚠ فشلت: {', '.join(failed_videos)}")
 
 
-# ── Helpers ─────────────────────────────────────────────────
+# ── دوال مساعدة ─────────────────────────────────────────────
 
-def _run_demucs(wav_path: Path, out_path: Path):
-    """
-    FIX: استخدام Demucs CLI بدلاً من apply_model مباشرة
-    يدعم الملفات الطويلة تلقائياً بالـ chunking
-    """
+
+def _run_demucs(wav_path: Path, out_path: Path) -> Path:
+    """عزل الصوت باستخدام Demucs CLI"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_dir = out_path.parent / f"demucs_tmp_{wav_path.stem}"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-
+    
     try:
         subprocess.run([
             "python", "-m", "demucs",
@@ -147,21 +162,110 @@ def _run_demucs(wav_path: Path, out_path: Path):
             "-n", "htdemucs_ft",
             "--out", str(tmp_dir),
             str(wav_path)
-        ], check=True)
-
-        # Demucs يحفظ هنا: tmp_dir/htdemucs_ft/FILENAME/vocals.wav
+        ], check=True, capture_output=True)
+        
         vocal_files = list(tmp_dir.rglob("vocals.wav"))
         if not vocal_files:
-            raise FileNotFoundError(f"Demucs output not found in {tmp_dir}")
-
+            raise FileNotFoundError(f"لم يجد Demucs صوت في {tmp_dir}")
+        
         shutil.move(str(vocal_files[0]), str(out_path))
-        print(f"    ✔ Vocals saved: {out_path.name}")
-
+        return out_path
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _segment_by_silence(audio_path: Path, min_silence_duration=0.5, sr=44100) -> list:
+    """تقسيم الصوت عند التوقفات (الصمت)"""
+    try:
+        y, sr = librosa.load(str(audio_path), sr=sr)
+        
+        # اكتشف الصمت
+        S = librosa.feature.melspectrogram(y=y, sr=sr)
+        S_db = librosa.power_to_db(S, ref=np.max)
+        threshold = -40
+        is_silent = np.mean(S_db, axis=0) < threshold
+        
+        # استخرج الفترات
+        segments = []
+        in_silence = False
+        start = 0
+        
+        frames = np.arange(len(is_silent))
+        hop_length = librosa.get_hop_length()
+        
+        for frame_idx, silent in enumerate(is_silent):
+            if silent and not in_silence:
+                in_silence = True
+                start = frame_idx
+            elif not silent and in_silence:
+                end_frame = frame_idx
+                if (end_frame - start) * hop_length / sr >= min_silence_duration:
+                    segments.append((start * hop_length / sr, end_frame * hop_length / sr))
+                in_silence = False
+        
+        # إذا لم توجد توقفات، قسم الصوت إلى أجزاء متساوية
+        if not segments:
+            duration = len(y) / sr
+            segment_length = 30
+            segments = [(i * segment_length, min((i+1) * segment_length, duration)) 
+                       for i in range(int(np.ceil(duration / segment_length)))]
+        
+        return segments
+    except Exception as e:
+        print(f"  ✗ فشل التقسيم: {e}")
+        return []
+
+
+def _extract_segments(audio_path: Path, segments: list, output_dir: Path, video_id: str) -> list:
+    """استخراج المقاطع الصوتية الصغيرة"""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    y, sr = librosa.load(str(audio_path), sr=44100)
+    segment_files = []
+    
+    for idx, (start_sec, end_sec) in enumerate(segments):
+        start_sample = int(start_sec * sr)
+        end_sample = int(end_sec * sr)
+        segment_audio = y[start_sample:end_sample]
+        
+        if len(segment_audio) < sr * 0.3:
+            continue
+        
+        segment_file = output_dir / f"{video_id}_{idx:03d}.wav"
+        torchaudio.save(str(segment_file), torch.from_numpy(segment_audio).unsqueeze(0), sr)
+        segment_files.append((idx, segment_file, start_sec, end_sec))
+    
+    print(f"    ✔ استخرج {len(segment_files)} مقطع")
+    return segment_files
+
+
+def _transcribe_segments(segment_files: list, whisper_model, align_model, align_meta, device: str) -> dict:
+    """تفريغ المقاطع باستخدام WhisperX"""
+    import whisperx
+    transcriptions = {}
+    
+    for idx, segment_file, start_sec, end_sec in segment_files:
+        try:
+            audio = whisperx.load_audio(str(segment_file))
+            result = whisper_model.transcribe(audio, language="ar")
+            result = whisperx.align(
+                result["segments"],
+                align_model,
+                align_meta,
+                audio,
+                device,
+                return_char_alignments=False,
+            )
+            text = " ".join(s.get("text", "").strip() for s in result.get("segments", []))
+            transcriptions[idx] = {"text": text, "start": start_sec, "end": end_sec}
+        except Exception as e:
+            print(f"    ⚠ فشل تفريغ مقطع {idx}: {e}")
+            transcriptions[idx] = {"text": "", "start": start_sec, "end": end_sec}
+    
+    return transcriptions
+
+
 def _load_whisperx(device, compute_type):
+    """تحميل نماذج WhisperX"""
     import whisperx
     model = whisperx.load_model(
         "large-v3", device, compute_type=compute_type, language="ar"

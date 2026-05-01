@@ -1,0 +1,5 @@
+# Format: link,videoId1,videoId2,...
+# Example (exclude two videos from the playlist):
+# https://www.youtube.com/playlist?list=PLxxxxxxxxxxxxxxxxxx,FIpuTep5I-o,AFlCRe-aU7w
+
+https://www.youtube.com/playlist?list=PL8I2WxsMdus-YeZzTX6JZP7q8gLBfDgxa,AFlCRe-aU7w

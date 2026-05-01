@@ -1,80 +1,151 @@
 """
-uploader.py — رفع نتائج الجلسة إلى Kaggle Dataset
-كل جلسة → Dataset مستقل باسمها
+uploader.py — المرحلة الثالثة
+رفع Datasets إلى Kaggle (TTS و LLM)
 """
 
 import json
-import os
 import subprocess
+import yaml
 from pathlib import Path
 
-from tracker import Tracker
 
-
-def upload_session(session: str, dataset_name: str, base_dir: str = "./data"):
-    tracker = Tracker(session, base_dir)
-    session_dir = Path(base_dir) / session
-
-    print(f"\n▶ Uploading session: {session}")
-    print(f"  Dataset name: {dataset_name}")
-
-    # التحقق من وجود بيانات للرفع
-    vocals_dir = session_dir / "vocals"
-    trans_dir  = session_dir / "transcripts"
-
-    vocals = list(vocals_dir.glob("*.wav"))  if vocals_dir.exists() else []
-    jsons  = list(trans_dir.glob("*.json")) if trans_dir.exists() else []
-    txts   = list(trans_dir.glob("*.txt"))  if trans_dir.exists() else []
-
-    print(f"  Vocals  : {len(vocals)} files")
-    print(f"  JSON    : {len(jsons)} files")
-    print(f"  TXT     : {len(txts)} files")
-
-    if not (vocals or jsons):
-        print("  ✗ Nothing to upload.")
+def upload_datasets(config_path: str = "config.yaml", data_dir: str = "data"):
+    """
+    رفع Datasets إلى Kaggle بناءً على config.yaml
+    - datasetTTS: يحتوي vocals + transcripts + metadata
+    - datasetLLM: يحتوي fulltranscripts
+    """
+    config_file = Path(config_path)
+    if not config_file.exists():
+        print(f"✗ ملف config {config_path} غير موجود")
         return
+    
+    with open(config_file, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    
+    dataset_tts_name = config.get("dataset_tts_name")
+    dataset_llm_name = config.get("dataset_llm_name")
+    
+    if not dataset_tts_name or not dataset_llm_name:
+        print("✗ لم يتم العثور على dataset_tts_name أو dataset_llm_name في config.yaml")
+        return
+    
+    data_path = Path(data_dir)
+    
+    # 1. رفع TTS Dataset
+    print(f"\n▶ رفع TTS Dataset: {dataset_tts_name}")
+    _upload_tts_dataset(dataset_tts_name, data_path)
+    
+    # 2. رفع LLM Dataset
+    print(f"\n▶ رفع LLM Dataset: {dataset_llm_name}")
+    _upload_llm_dataset(dataset_llm_name, data_path)
+    
+    print("\n✔ انتهى الرفع!")
 
-    # إنشاء dataset-metadata.json
-    kaggle_username = _get_kaggle_username()
-    meta = {
+
+def _upload_tts_dataset(dataset_name: str, data_path: Path):
+    """
+    رفع TTS Dataset (vocals + transcripts + metadata)
+    """
+    print(f"  التحضير...")
+    
+    # تحقق من وجود الملفات
+    vocals_dir = data_path / "vocals"
+    transcripts_dir = data_path / "transcripts"
+    metadata_file = data_path / "metadata" / "tts_metadata.json"
+    
+    if not vocals_dir.exists() or not transcripts_dir.exists() or not metadata_file.exists():
+        print("  ✗ الملفات المطلوبة غير موجودة")
+        return
+    
+    # إعداد مجلد الرفع
+    dataset_dir = data_path / f"kaggle_tts_{dataset_name}"
+    dataset_dir.mkdir(exist_ok=True)
+    
+    # انسخ الملفات
+    import shutil
+    shutil.copytree(vocals_dir, dataset_dir / "vocals", dirs_exist_ok=True)
+    shutil.copytree(transcripts_dir, dataset_dir / "transcripts", dirs_exist_ok=True)
+    shutil.copy(metadata_file, dataset_dir / "tts_metadata.json")
+    
+    # أنشئ dataset.json
+    dataset_info = {
         "title": dataset_name,
-        "id": f"{kaggle_username}/{dataset_name}",
-        "licenses": [{"name": "CC0-1.0"}],
-        "keywords": ["arabic", "audio", "transcription", "history-lab"]
+        "description": "TTS Dataset - صوت + نصوص + metadata",
+        "id": f"history-lab/{dataset_name.lower()}",
     }
-    meta_path = session_dir / "dataset-metadata.json"
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
-
-    # رفع إلى Kaggle
-    print("\n▶ Uploading to Kaggle...")
+    with open(dataset_dir / "dataset-metadata.json", "w", encoding="utf-8") as f:
+        json.dump(dataset_info, f, ensure_ascii=False, indent=2)
+    
+    # رفع باستخدام Kaggle CLI
+    print(f"  رفع إلى Kaggle...")
     try:
-        result = subprocess.run(
-            f"kaggle datasets create -p {session_dir} --dir-mode zip",
-            shell=True, capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print(f"  ✔ Dataset created!")
-            print(f"  → kaggle.com/datasets/{kaggle_username}/{dataset_name}")
-        else:
-            # ربما الـ dataset موجود بالفعل — نحدثه
-            result2 = subprocess.run(
-                f"kaggle datasets version -p {session_dir} -m 'session {session}' --dir-mode zip",
-                shell=True, capture_output=True, text=True
-            )
-            if result2.returncode == 0:
-                print(f"  ✔ Dataset version updated!")
-            else:
-                print(f"  ✗ Kaggle error: {result.stderr}")
+        subprocess.run([
+            "kaggle", "datasets", "create",
+            "-p", str(dataset_dir),
+            "-q"
+        ], check=True)
+        print(f"  ✔ تم الرفع: {dataset_name}")
+    except subprocess.CalledProcessError:
+        # محاولة التحديث لو كان موجود
+        print(f"  تحديث الـ Dataset...")
+        subprocess.run([
+            "kaggle", "datasets", "version",
+            "-p", str(dataset_dir),
+            "-m", "تحديث جديد"
+        ], check=True)
+        print(f"  ✔ تم التحديث: {dataset_name}")
     except Exception as e:
-        print(f"  ✗ Upload failed: {e}")
-
-    tracker.summary()
+        print(f"  ✗ فشل الرفع: {e}")
 
 
-def _get_kaggle_username() -> str:
-    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
-    if kaggle_json.exists():
-        with open(kaggle_json) as f:
-            return json.load(f)["username"]
-    return os.getenv("KAGGLE_USERNAME", "unknown")
+def _upload_llm_dataset(dataset_name: str, data_path: Path):
+    """
+    رفع LLM Dataset (fulltranscripts فقط)
+    """
+    print(f"  التحضير...")
+    
+    # تحقق من وجود الملفات
+    fulltranscripts_dir = data_path / "fulltranscripts"
+    
+    if not fulltranscripts_dir.exists():
+        print("  ✗ مجلد fulltranscripts غير موجود")
+        return
+    
+    # إعداد مجلد الرفع
+    dataset_dir = data_path / f"kaggle_llm_{dataset_name}"
+    dataset_dir.mkdir(exist_ok=True)
+    
+    # انسخ الملفات
+    import shutil
+    shutil.copytree(fulltranscripts_dir, dataset_dir / "fulltranscripts", dirs_exist_ok=True)
+    
+    # أنشئ metadata
+    dataset_info = {
+        "title": dataset_name,
+        "description": "LLM Dataset - نصوص كاملة",
+        "id": f"history-lab/{dataset_name.lower()}",
+    }
+    with open(dataset_dir / "dataset-metadata.json", "w", encoding="utf-8") as f:
+        json.dump(dataset_info, f, ensure_ascii=False, indent=2)
+    
+    # رفع باستخدام Kaggle CLI
+    print(f"  رفع إلى Kaggle...")
+    try:
+        subprocess.run([
+            "kaggle", "datasets", "create",
+            "-p", str(dataset_dir),
+            "-q"
+        ], check=True)
+        print(f"  ✔ تم الرفع: {dataset_name}")
+    except subprocess.CalledProcessError:
+        # محاولة التحديث
+        print(f"  تحديث الـ Dataset...")
+        subprocess.run([
+            "kaggle", "datasets", "version",
+            "-p", str(dataset_dir),
+            "-m", "تحديث جديد"
+        ], check=True)
+        print(f"  ✔ تم التحديث: {dataset_name}")
+    except Exception as e:
+        print(f"  ✗ فشل الرفع: {e}")

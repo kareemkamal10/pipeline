@@ -23,53 +23,62 @@ chmod 600 ~/.kaggle/kaggle.json
 
 ### المرحلة 1 — التحميل (CPU، بدون GPU)
 
-```bash
-python main.py download \
-  --session batch_01 \
-  --playlists "https://youtube.com/playlist?list=XXX" "https://youtube.com/playlist?list=YYY"
+**الخطوة الأولى:** تحضير ملف `playLinks.csv`:
+```csv
+https://www.youtube.com/playlist?list=PL8I2WxsMdus-YeZzTX6JZP7q8gLBfDgxa,AFlCRe-aU7w
+https://www.youtube.com/playlist?list=PLxxxxxxxxxxxxxxxxxx,VIDEO_ID_1,VIDEO_ID_2
 ```
 
-- يحمّل الصوت كـ WAV بجودة 44100Hz
-- يحفظ الملفات في `./data/batch_01/raw_audio/`
-- يسجل كل playlist وفيديو في `tracker.json`
-- **لن يعيد تحميل playlist تم تحميلها بالفعل**
+**شكل الملف:**
+- العمود الأول: رابط قائمة التشغيل
+- الأعمدة المتبقية: معرفات الفيديوهات المستثناة (اختياري)
+
+**التشغيل:**
+```bash
+python main.py download playLinks.csv
+```
+
+- يحمّل الصوت فقط كـ WAV بجودة 44100Hz
+- يحفظ الملفات في `data/raw_audio/`
+- يتجاهل الفيديوهات المستثناة (المذكورة في CSV)
+- في مجلد مؤقت يتم حذفه بعد التحويل
 
 ---
 
 ### المرحلة 2 — المعالجة (GPU مطلوب)
 
 ```bash
-python main.py process --session batch_01
+python main.py process
 ```
 
-- يعزل صوت المعلق بـ **Demucs htdemucs_ft**
-- ينسخ الكلام بـ **WhisperX large-v3** (عربي)
+- يعزل صوت المتكلم بـ **Demucs htdemucs_ft**
+- **يقسم الصوت عند كل جملة/توقف** (استخدام librosa لاكتشاف الصمت)
+- ينسخ كل مقطع صوتي بـ **WhisperX large-v3** (عربي)
 - يحفظ:
-  - `./data/batch_01/vocals/` — الصوت المنقى
-  - `./data/batch_01/transcripts/*.json` — word-level timestamps
-  - `./data/batch_01/transcripts/*.txt` — النص الكامل
-- **لن يعيد معالجة فيديو تمت معالجته بالفعل**
+  - `data/vocals/` — مقاطع صوتية صغيرة (VIDEO_ID_000.wav, VIDEO_ID_001.wav, ...)
+  - `data/transcripts/` — نص لكل مقطع (VIDEO_ID_000.txt, VIDEO_ID_001.txt, ...)
+  - `data/fulltranscripts/` — النص الكامل (VIDEO_ID.txt)
+  - `data/metadata/tts_metadata.json` — ملف metadata موحد (يُحدَّث عند كل جلسة)
 
 ---
 
-### رفع النتائج إلى Kaggle
+### المرحلة 3 — رفع النتائج إلى Kaggle
 
-```bash
-python main.py upload \
-  --session batch_01 \
-  --dataset history-lab-batch-01
+**الخطوة الأولى:** تحضير `config.yaml`:
+```yaml
+dataset_tts_name: "history-lab-tts-v1"
+dataset_llm_name: "history-lab-llm-v1"
 ```
 
-- كل جلسة → Dataset مستقل باسمها
-- يرفع الصوت المنقى والنصوص معاً
-
----
-
-### عرض حالة الجلسة
-
+**التشغيل:**
 ```bash
-python main.py status --session batch_01
+python main.py upload
 ```
+
+- يرفع **TTS Dataset**: vocals + transcripts + metadata
+- يرفع **LLM Dataset**: fulltranscripts فقط
+- لو كان الاسم جديد: ينشئ dataset جديد
+- لو كان موجود: يحدث الـ dataset الموجود
 
 ---
 
@@ -77,17 +86,32 @@ python main.py status --session batch_01
 
 ```
 data/
-└── batch_01/
-    ├── tracker.json          ← سجل الحالة
-    ├── raw_audio/
-    │   └── PLAYLIST_ID/
-    │       └── VIDEO_ID.wav
-    ├── vocals/
-    │   └── VIDEO_ID.wav      ← صوت منقى
-    └── transcripts/
-        ├── VIDEO_ID.json     ← word timestamps
-        └── VIDEO_ID.txt      ← نص كامل
+├── raw_audio/
+│   ├── VIDEO_ID_1.wav
+│   ├── VIDEO_ID_2.wav
+│   └── ...
+├── vocals/
+│   ├── VIDEO_ID_1_000.wav    ← مقطع صوتي منقى (عند كل جملة/توقف)
+│   ├── VIDEO_ID_1_001.wav
+│   ├── VIDEO_ID_2_000.wav
+│   └── ...
+├── transcripts/
+│   ├── VIDEO_ID_1_000.txt    ← نص لكل مقطع صوتي
+│   ├── VIDEO_ID_1_001.txt
+│   ├── VIDEO_ID_2_000.txt
+│   └── ...
+├── fulltranscripts/
+│   ├── VIDEO_ID_1.txt        ← النص الكامل
+│   ├── VIDEO_ID_2.txt
+│   └── ...
+└── metadata/
+    └── tts_metadata.json     ← metadata واحد للجلسة (يُحدَّث عند كل معالجة جديدة)
 ```
+
+**ملف metadata الواحد (tts_metadata.json):**
+- يحتوي على كل الفيديوهات والمقاطع الصوتية في الجلسة الحالية
+- عند إضافة جلسة جديدة (تكملة لـ dataset موجود): يتم سحب ملف metadata القديم وتحديثه بالبيانات الجديدة
+- يحتفظ بـ: حجم الملفات، عدد الساعات، ربط صوت↔نص لكل مقطع
 
 ---
 

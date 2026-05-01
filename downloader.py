@@ -1,88 +1,109 @@
-"""
-downloader.py — المرحلة الأولى (CPU)
-تحميل قوائم التشغيل كـ WAV 44100Hz وحفظها على الديسك
-"""
-
 import os
-import re
+import sys
+import csv
+import subprocess
 from pathlib import Path
 
-import yt_dlp
+try:
+    import yt_dlp
+except ImportError:
+    print("يرجى تثبيت yt-dlp: pip install yt-dlp")
+    sys.exit(1)
 
-from tracker import Tracker
+def read_links_and_excludes(csv_path):
+    """
+    Reads playLinks.csv and returns a list of (playlist_url, set_of_excluded_video_ids)
+    """
+    result = []
+    with open(csv_path, encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row or not row[0].strip() or row[0].strip().startswith('#'):
+                continue
+            url = row[0].strip()
+            excludes = set(x.strip() for x in row[1:] if x.strip())
+            result.append((url, excludes))
+    return result
 
+def get_playlist_video_ids(playlist_url):
+    """
+    Returns a list of (video_id, video_url) for the playlist_url using yt_dlp
+    """
+    ydl_opts = {
+        'quiet': True,
+        'extract_flat': True,
+        'skip_download': True,
+        'force_generic_extractor': False,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(playlist_url, download=False)
+        entries = info.get('entries', [])
+        videos = []
+        for entry in entries:
+            vid = entry.get('id')
+            url = entry.get('url')
+            if vid and url:
+                videos.append((vid, f"https://www.youtube.com/watch?v={vid}"))
+        return videos
 
-def extract_playlist_id(url: str) -> str:
-    match = re.search(r"list=([A-Za-z0-9_-]+)", url)
-    if match:
-        return match.group(1)
-    match = re.search(r"v=([A-Za-z0-9_-]+)", url)
-    if match:
-        return match.group(1)
-    return re.sub(r"[^A-Za-z0-9_-]", "_", url)[-32:]
+def download_and_convert(video_urls, out_dir="data/raw_audio"):
+    import shutil
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path("./_tmp_download")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
+    # تحميل الصوت فقط في مجلد مؤقت
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": str(tmp_dir / "%(id)s.%(ext)s"),
+        "ignoreerrors": True,
+        "quiet": False,
+    }
+    print(f"\n▶ تحميل الصوت فقط في مجلد مؤقت ...")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download(video_urls)
 
-def download_session(session: str, playlist_urls: list, base_dir: str = "./data"):
-    tracker = Tracker(session, base_dir)
-    audio_dir = Path(base_dir) / session / "raw_audio"
-    audio_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n▶ Session: {session}")
-    print(f"  Playlists received: {len(playlist_urls)}")
-
-    for url in playlist_urls:
-        pid = extract_playlist_id(url)
-        tracker.add_playlist(pid, url)
-
-    pending = tracker.get_pending_download()
-    if not pending:
-        print("\n✔ All playlists already downloaded — nothing to do.")
-        tracker.summary()
-        return
-
-    print(f"  Pending download: {len(pending)} playlist(s)\n")
-
-    for playlist_id, url in pending:
-        print(f"\n━━━ Downloading playlist: {playlist_id}")
-        print(f"  URL: {url}")
-
-        pl_dir = audio_dir / playlist_id
-        pl_dir.mkdir(parents=True, exist_ok=True)
-
-        downloaded_ids = []
-
-        def progress_hook(d):
-            if d["status"] == "finished":
-                vid_id = Path(d["filename"]).stem
-                tracker.mark_video_downloaded(playlist_id, vid_id)
-                downloaded_ids.append(vid_id)
-
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": str(pl_dir / "%(id)s.%(ext)s"),
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "wav",
-                "preferredquality": "0",
-            }],
-            # FIX: postprocessor_args must be a dict keyed by postprocessor name
-            "postprocessor_args": {
-                "FFmpegExtractAudio": ["-ar", "44100", "-ac", "1"]
-            },
-            "ignoreerrors": True,
-            "quiet": False,
-            "progress_hooks": [progress_hook],
-        }
-
+    # تحويل كل ملف صوتي إلى wav في المجلد النهائي
+    print(f"\n▶ تحويل الملفات الصوتية إلى wav ...")
+    for audio_file in tmp_dir.iterdir():
+        if audio_file.suffix.lower() in [".wav"]:
+            shutil.copy2(audio_file, out_dir / audio_file.name)
+            continue
+        wav_file = out_dir / f"{audio_file.stem}.wav"
+        print(f"  تحويل {audio_file.name} → {wav_file.name}")
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-
-            tracker.mark_playlist_downloaded(playlist_id)
-            print(f"  ✔ Playlist done — {len(downloaded_ids)} videos")
-
+            subprocess.run([
+                "ffmpeg", "-y", "-i", str(audio_file), "-ar", "44100", "-ac", "1", str(wav_file)
+            ], check=True)
         except Exception as e:
-            print(f"  ✗ Error on playlist {playlist_id}: {e}")
+            print(f"  ✗ فشل التحويل: {e}")
+    shutil.rmtree(tmp_dir)
+    print("\n✔ انتهى! ستجد ملفات wav فقط في:", out_dir)
 
-    tracker.summary()
-    print("\n✔ Download stage complete — switch to GPU and run: process")
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("استخدم: python downloader.py playLinks.csv")
+        sys.exit(1)
+    csv_path = sys.argv[1]
+    all_links = read_links_and_excludes(csv_path)
+    for playlist_url, excludes in all_links:
+        print(f"\n=== معالجة قائمة التشغيل: {playlist_url}")
+        videos = get_playlist_video_ids(playlist_url)
+        found_ids = set(vid for vid, _ in videos)
+        # تحقق من الاستثناءات غير الموجودة
+        for ex in excludes:
+            if ex not in found_ids:
+                print(f"  ⚠️ لم يتم العثور على الفيديو المستثنى: {ex}")
+        # استبعد الفيديوهات المطلوبة
+        filtered = [(vid, url) for vid, url in videos if vid not in excludes]
+        if not filtered:
+            print("  لا يوجد فيديوهات متاحة بعد الاستثناءات!")
+            continue
+        print(f"  سيتم تحميل {len(filtered)} فيديو...")
+        video_urls = [url for _, url in filtered]
+        # احفظ كل الملفات في مجلد واحد فقط: data/raw_audio
+        out_dir = Path("data") / "raw_audio"
+        download_and_convert(video_urls, out_dir)
