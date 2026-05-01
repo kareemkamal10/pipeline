@@ -260,35 +260,61 @@ def _run_demucs(wav_path: Path, out_path: Path) -> Path:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _segment_by_silence(audio_path: Path, min_silence_duration=0.5, sr=44100) -> list:
-    """تقسيم الصوت عند التوقفات (الصمت)"""
+def _segment_by_silence(audio_path: Path, sr=44100,
+                        top_db=40, hop_length=512,
+                        merge_gap_sec=1.5) -> list:
+    """
+    تقسيم الصوت عند الصمت الطويل فقط.
+
+    المنطق:
+    - librosa.effects.split يُرجع فقط المقاطع الصوتية (الصمت مستبعد تلقائياً).
+    - نُدمج أي مقطعين متتاليين إذا كان الصمت بينهما أقل من merge_gap_sec
+      (صمت قصير = توقف طبيعي بين الكلام، لا نريد قطعه).
+    - إذا كان الصمت أطول من merge_gap_sec (مكان موسيقى محذوفة مثلاً)
+      → نجعله نقطة قطع ونتجاهل الصمت نفسه تماماً.
+
+    المعاملات:
+        top_db      : حساسية كشف الصمت (40 = -40dB مناسب لصوت بعد Demucs)
+        merge_gap_sec: الحد الفاصل بالثواني — صمت أقصر → دمج، أطول → قطع
+    """
     try:
         y, sr = librosa.load(str(audio_path), sr=sr)
 
-        # Use a fixed hop_length to avoid relying on removed internals
-        hop_length = 512
+        # استخراج المقاطع الصوتية (بدون الصمت)
+        intervals = librosa.effects.split(y, top_db=top_db, hop_length=hop_length)
 
-        # Use librosa.effects.split to get non-silent intervals (speech)
-        # top_db controls sensitivity; 40 ~= -40dB threshold
-        intervals = librosa.effects.split(y, top_db=40, hop_length=hop_length)
+        if len(intervals) == 0:
+            print(f"    ⚠ لم يُكتشف أي صوت في الملف")
+            return []
 
-        segments = []
-        for start_sample, end_sample in intervals:
-            start_sec = start_sample / sr
-            end_sec = end_sample / sr
-            # skip too-short segments
-            if end_sec - start_sec < 0.3:
-                continue
-            segments.append((start_sec, end_sec))
+        # دمج المقاطع المتقاربة (الصمت القصير بينها = داخل الكلام)
+        merged = []
+        current_start, current_end = intervals[0]
 
-        # If no segments detected, fallback to fixed-size chunks
+        for next_start, next_end in intervals[1:]:
+            gap_sec = (next_start - current_end) / sr
+            if gap_sec <= merge_gap_sec:
+                # صمت قصير → دمج مع المقطع الحالي
+                current_end = next_end
+            else:
+                # صمت طويل → نُغلق المقطع الحالي ونبدأ جديداً
+                merged.append((current_start / sr, current_end / sr))
+                current_start, current_end = next_start, next_end
+
+        merged.append((current_start / sr, current_end / sr))
+
+        # تجاهل المقاطع القصيرة جداً (أقل من ثانية — ضوضاء متبقية)
+        segments = [(s, e) for s, e in merged if e - s >= 1.0]
+
         if not segments:
+            print(f"    ⚠ لم يتبقَّ أي مقطع بعد الفلترة، استخدام Fallback (30ث)")
             duration = len(y) / sr
-            segment_length = 30
-            segments = [(i * segment_length, min((i+1) * segment_length, duration))
-                       for i in range(int(np.ceil(duration / segment_length)))]
+            segments = [(i * 30, min((i + 1) * 30, duration))
+                        for i in range(int(np.ceil(duration / 30)))]
 
+        print(f"    ✔ {len(segments)} مقطع (merge_gap={merge_gap_sec}s)")
         return segments
+
     except Exception as e:
         print(f"  ✗ فشل التقسيم: {e}")
         return []
