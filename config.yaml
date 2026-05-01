@@ -2,10 +2,10 @@
 # تحديد أسماء الـ Datasets على Kaggle
 
 # TTS Dataset: يحتوي على vocals + transcripts + metadata
-dataset_tts_name: "history-lab-tts-v1"
+dataset_tts_name: "test-tts-v1"
 
 # LLM Dataset: يحتوي على fulltranscripts فقط
-dataset_llm_name: "history-lab-llm-v1"
+dataset_llm_name: "test-llm-v1"
 
 # ملاحظات:
 # - لو كان الاسم جديد: سيتم إنشاء dataset جديد
