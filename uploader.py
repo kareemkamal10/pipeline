@@ -9,6 +9,13 @@ import yaml
 from pathlib import Path
 
 
+def _get_kaggle_username() -> str:
+    """قراءة username من ~/.kaggle/kaggle.json"""
+    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
+    with open(kaggle_json, encoding="utf-8") as f:
+        return json.load(f)["username"]
+
+
 def _check_kaggle_auth() -> bool:
     """التحقق من إعداد Kaggle CLI قبل محاولة الرفع"""
     kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
@@ -103,12 +110,12 @@ def _upload_tts_dataset(dataset_name: str, data_path: Path):
     dataset_info = {
         "title": dataset_name,
         "description": "TTS Dataset - صوت + نصوص + metadata",
-        "id": f"history-lab/{dataset_name.lower()}",
+        "id": f"{_get_kaggle_username()}/{dataset_name.lower()}",
         "licenses": [{"name": "CC0-1.0"}],
     }
     with open(dataset_dir / "dataset-metadata.json", "w", encoding="utf-8") as f:
         json.dump(dataset_info, f, ensure_ascii=False, indent=2)
-    
+
     # رفع باستخدام Kaggle CLI
     print(f"  رفع إلى Kaggle...")
     try:
@@ -118,11 +125,11 @@ def _upload_tts_dataset(dataset_name: str, data_path: Path):
             "--dir-mode", "zip",
             "-q"
         ], check=True)
-        print(f"  ✔ تم الرفع: {dataset_name}")
+        print(f"  ✔ تم الإنشاء: {dataset_name}")
     except subprocess.CalledProcessError:
-        # محاولة التحديث لو كان موجود
+        # Dataset موجود مسبقاً → حدّث نسخة جديدة
         try:
-            print(f"  تحديث الـ Dataset...")
+            print(f"  Dataset موجود — تحديث نسخة جديدة...")
             subprocess.run([
                 "kaggle", "datasets", "version",
                 "-p", str(dataset_dir),
@@ -161,7 +168,7 @@ def _upload_llm_dataset(dataset_name: str, data_path: Path):
     dataset_info = {
         "title": dataset_name,
         "description": "LLM Dataset - نصوص كاملة",
-        "id": f"history-lab/{dataset_name.lower()}",
+        "id": f"{_get_kaggle_username()}/{dataset_name.lower()}",
         "licenses": [{"name": "CC0-1.0"}],
     }
     with open(dataset_dir / "dataset-metadata.json", "w", encoding="utf-8") as f:
