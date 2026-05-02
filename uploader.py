@@ -104,6 +104,7 @@ def _upload_tts_dataset(dataset_name: str, data_path: Path):
         "title": dataset_name,
         "description": "TTS Dataset - صوت + نصوص + metadata",
         "id": f"history-lab/{dataset_name.lower()}",
+        "licenses": [{"name": "CC0-1.0"}],
     }
     with open(dataset_dir / "dataset-metadata.json", "w", encoding="utf-8") as f:
         json.dump(dataset_info, f, ensure_ascii=False, indent=2)
@@ -114,6 +115,7 @@ def _upload_tts_dataset(dataset_name: str, data_path: Path):
         subprocess.run([
             "kaggle", "datasets", "create",
             "-p", str(dataset_dir),
+            "--dir-mode", "zip",
             "-q"
         ], check=True)
         print(f"  ✔ تم الرفع: {dataset_name}")
@@ -124,6 +126,7 @@ def _upload_tts_dataset(dataset_name: str, data_path: Path):
             subprocess.run([
                 "kaggle", "datasets", "version",
                 "-p", str(dataset_dir),
+                "--dir-mode", "zip",
                 "-m", "تحديث جديد"
             ], check=True)
             print(f"  ✔ تم التحديث: {dataset_name}")
@@ -159,6 +162,7 @@ def _upload_llm_dataset(dataset_name: str, data_path: Path):
         "title": dataset_name,
         "description": "LLM Dataset - نصوص كاملة",
         "id": f"history-lab/{dataset_name.lower()}",
+        "licenses": [{"name": "CC0-1.0"}],
     }
     with open(dataset_dir / "dataset-metadata.json", "w", encoding="utf-8") as f:
         json.dump(dataset_info, f, ensure_ascii=False, indent=2)
@@ -169,6 +173,7 @@ def _upload_llm_dataset(dataset_name: str, data_path: Path):
         subprocess.run([
             "kaggle", "datasets", "create",
             "-p", str(dataset_dir),
+            "--dir-mode", "zip",
             "-q"
         ], check=True)
         print(f"  ✔ تم الرفع: {dataset_name}")
@@ -179,6 +184,7 @@ def _upload_llm_dataset(dataset_name: str, data_path: Path):
             subprocess.run([
                 "kaggle", "datasets", "version",
                 "-p", str(dataset_dir),
+                "--dir-mode", "zip",
                 "-m", "تحديث جديد"
             ], check=True)
             print(f"  ✔ تم التحديث: {dataset_name}")
