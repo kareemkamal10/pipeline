@@ -1,11 +1,16 @@
+# مفاتيح API — لا تُرفع أبداً
+secrets/CREDENTIALS.json
+secrets/kaggle.json
+
+# بيانات
 data/
-*.wav
-*.json
-!dataset-metadata.json
-kaggle.json
-.env
+
+# Python
 __pycache__/
 *.pyc
-.DS_Store
+*.pyo
+.env
+
+# مؤقت
 _tmp_download/
-lightning_report/
+demucs_tmp_*/

@@ -10,26 +10,26 @@ from pathlib import Path
 
 
 def _get_kaggle_username() -> str:
-    """قراءة username من ~/.kaggle/kaggle.json"""
-    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
-    with open(kaggle_json, encoding="utf-8") as f:
+    """قراءة username من secrets/kaggle.json"""
+    with open(KAGGLE_JSON, encoding="utf-8") as f:
         return json.load(f)["username"]
+
+
+SECRETS_DIR = Path(__file__).parent / "secrets"
+KAGGLE_JSON  = SECRETS_DIR / "kaggle.json"
 
 
 def _check_kaggle_auth() -> bool:
     """التحقق من إعداد Kaggle CLI قبل محاولة الرفع"""
-    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
-    if not kaggle_json.exists():
-        print("\n✗ Kaggle CLI غير مُعدَّة.")
-        print("  لإعدادها:")
-        print("  1. اذهب إلى https://www.kaggle.com/settings")
-        print("  2. قسم API → اضغط Create New Token")
-        print("  3. سيتم تحميل ملف kaggle.json")
-        print("  4. نفّذ الأوامر التالية:")
-        print("       mkdir -p ~/.kaggle")
-        print("       cp kaggle.json ~/.kaggle/kaggle.json")
-        print("       chmod 600 ~/.kaggle/kaggle.json")
+    if not KAGGLE_JSON.exists():
+        print("\n✗ ملف secrets/kaggle.json غير موجود.")
+        print("  لإعداده:")
+        print("  1. اذهب إلى https://www.kaggle.com/settings → API → Create New Token")
+        print("  2. ضع الملف المُحمَّل في:  secrets/kaggle.json")
         return False
+
+    import os
+    os.environ["KAGGLE_CONFIG_DIR"] = str(SECRETS_DIR)
 
     result = subprocess.run(
         ["kaggle", "datasets", "list", "--mine", "--max-size", "1"],
