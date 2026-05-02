@@ -149,14 +149,16 @@ def process_session(base_dir: str = "data"):
 
                 file_size = segment_file.stat().st_size
                 duration = end_sec - start_sec
+                word_timestamps = transcriptions.get(idx, {}).get("word_timestamps", [])
                 all_metadata_samples.append({
-                    "video_id": video_id,
-                    "segment_id": idx,
-                    "audio_file": str(segment_file.relative_to(data_path)),
-                    "text_file": str(text_file.relative_to(data_path)),
+                    "video_id":        video_id,
+                    "segment_id":      idx,
+                    "audio_file":      str(segment_file.relative_to(data_path)),
+                    "text_file":       str(text_file.relative_to(data_path)),
                     "duration_seconds": round(duration, 2),
                     "file_size_bytes": file_size,
-                    "text": text,
+                    "text":            text,
+                    "word_timestamps": word_timestamps,
                 })
 
             # حفظ النص الكامل
@@ -262,49 +264,62 @@ def _run_demucs(wav_path: Path, out_path: Path) -> Path:
 
 def _segment_by_silence(audio_path: Path, sr=44100,
                         top_db=40, hop_length=512,
-                        merge_gap_sec=3.0) -> list:
+                        merge_gap_sec=3.0,
+                        max_segment_sec=35.0) -> list:
     """
-    تقسيم الصوت عند الصمت الطويل فقط.
+    تقسيم الصوت عند الصمت الطويل فقط، مع ضمان ألا يتجاوز أي مقطع الحد الأقصى.
 
     المنطق:
-    - librosa.effects.split يُرجع فقط المقاطع الصوتية (الصمت مستبعد تلقائياً).
-    - نُدمج أي مقطعين متتاليين إذا كان الصمت بينهما أقل من merge_gap_sec
-      (صمت قصير = توقف طبيعي بين الكلام، لا نريد قطعه).
-    - إذا كان الصمت أطول من merge_gap_sec (مكان موسيقى محذوفة مثلاً)
-      → نجعله نقطة قطع ونتجاهل الصمت نفسه تماماً.
+    1. librosa.effects.split يُرجع فقط المقاطع الصوتية (الصمت مستبعد تلقائياً).
+    2. نُدمج المقاطع إذا كان الصمت بينها < merge_gap_sec (توقف طبيعي).
+    3. إذا كان الصمت > merge_gap_sec → قطع (مكان موسيقى محذوفة).
+    4. إذا كان المقطع بعد الدمج > max_segment_sec → نقسمه بالتساوي
+       دون الوقوع في الصمت (تقسيم زمني نظيف).
 
     المعاملات:
-        top_db      : حساسية كشف الصمت (40 = -40dB مناسب لصوت بعد Demucs)
-        merge_gap_sec: الحد الفاصل بالثواني — صمت أقصر → دمج، أطول → قطع
+        merge_gap_sec   : صمت أقصر → دمج | أطول → قطع  (ثانية)
+        max_segment_sec : الحد الأقصى لأي مقطع ناتج     (ثانية، الهدف 30ث)
     """
     try:
         y, sr = librosa.load(str(audio_path), sr=sr)
 
-        # استخراج المقاطع الصوتية (بدون الصمت)
         intervals = librosa.effects.split(y, top_db=top_db, hop_length=hop_length)
 
         if len(intervals) == 0:
             print(f"    ⚠ لم يُكتشف أي صوت في الملف")
             return []
 
-        # دمج المقاطع المتقاربة (الصمت القصير بينها = داخل الكلام)
+        # ── الخطوة 1: دمج المقاطع المتقاربة ─────────────────────────────────
         merged = []
         current_start, current_end = intervals[0]
 
         for next_start, next_end in intervals[1:]:
             gap_sec = (next_start - current_end) / sr
             if gap_sec <= merge_gap_sec:
-                # صمت قصير → دمج مع المقطع الحالي
                 current_end = next_end
             else:
-                # صمت طويل → نُغلق المقطع الحالي ونبدأ جديداً
                 merged.append((current_start / sr, current_end / sr))
                 current_start, current_end = next_start, next_end
 
         merged.append((current_start / sr, current_end / sr))
 
-        # تجاهل المقاطع القصيرة جداً (أقل من ثانية — ضوضاء متبقية)
-        segments = [(s, e) for s, e in merged if e - s >= 1.0]
+        # ── الخطوة 2: تقسيم المقاطع الطويلة ─────────────────────────────────
+        segments = []
+        for start, end in merged:
+            duration = end - start
+            if duration <= max_segment_sec:
+                segments.append((start, end))
+            else:
+                # قسّم بالتساوي بأجزاء لا تتجاوز max_segment_sec
+                n_chunks = int(np.ceil(duration / max_segment_sec))
+                chunk_size = duration / n_chunks
+                for i in range(n_chunks):
+                    chunk_start = start + i * chunk_size
+                    chunk_end   = start + (i + 1) * chunk_size
+                    segments.append((round(chunk_start, 3), round(chunk_end, 3)))
+
+        # ── الخطوة 3: فلترة المقاطع القصيرة جداً ────────────────────────────
+        segments = [(s, e) for s, e in segments if e - s >= 1.0]
 
         if not segments:
             print(f"    ⚠ لم يتبقَّ أي مقطع بعد الفلترة، استخدام Fallback (30ث)")
@@ -312,7 +327,9 @@ def _segment_by_silence(audio_path: Path, sr=44100,
             segments = [(i * 30, min((i + 1) * 30, duration))
                         for i in range(int(np.ceil(duration / 30)))]
 
-        print(f"    ✔ {len(segments)} مقطع (merge_gap={merge_gap_sec}s)")
+        durations = [e - s for s, e in segments]
+        avg_dur   = sum(durations) / len(durations)
+        print(f"    ✔ {len(segments)} مقطع | متوسط: {avg_dur:.1f}ث | أطول: {max(durations):.1f}ث")
         return segments
 
     except Exception as e:
@@ -343,15 +360,23 @@ def _extract_segments(audio_path: Path, segments: list, output_dir: Path, video_
 
 
 def _transcribe_segments(segment_files: list, whisper_model, align_model, align_meta, device: str) -> dict:
-    """تفريغ المقاطع باستخدام WhisperX"""
+    """
+    تفريغ المقاطع باستخدام WhisperX مع حفظ timestamps الكلمات.
+
+    الناتج لكل مقطع:
+        text            : النص الكامل
+        start / end     : زمن المقطع في الملف الأصلي (ثانية)
+        word_timestamps : قائمة بكل كلمة وزمنها الدقيق داخل المقطع
+                          [{"word": "...", "start": 0.0, "end": 0.5, "score": 0.99}, ...]
+    """
     import whisperx
     transcriptions = {}
-    
+
     for idx, segment_file, start_sec, end_sec in segment_files:
         try:
             audio = whisperx.load_audio(str(segment_file))
             result = whisper_model.transcribe(audio, language="ar")
-            result = whisperx.align(
+            aligned = whisperx.align(
                 result["segments"],
                 align_model,
                 align_meta,
@@ -359,12 +384,40 @@ def _transcribe_segments(segment_files: list, whisper_model, align_model, align_
                 device,
                 return_char_alignments=False,
             )
-            text = " ".join(s.get("text", "").strip() for s in result.get("segments", []))
-            transcriptions[idx] = {"text": text, "start": start_sec, "end": end_sec}
+
+            # نص كامل
+            text = " ".join(
+                s.get("text", "").strip()
+                for s in aligned.get("segments", [])
+            )
+
+            # timestamps على مستوى الكلمة
+            word_timestamps = []
+            for seg in aligned.get("segments", []):
+                for w in seg.get("words", []):
+                    word_timestamps.append({
+                        "word":  w.get("word", "").strip(),
+                        "start": round(w.get("start", 0.0), 3),
+                        "end":   round(w.get("end",   0.0), 3),
+                        "score": round(w.get("score", 0.0), 3),
+                    })
+
+            transcriptions[idx] = {
+                "text":            text,
+                "start":           start_sec,
+                "end":             end_sec,
+                "word_timestamps": word_timestamps,
+            }
+
         except Exception as e:
             print(f"    ⚠ فشل تفريغ مقطع {idx}: {e}")
-            transcriptions[idx] = {"text": "", "start": start_sec, "end": end_sec}
-    
+            transcriptions[idx] = {
+                "text":            "",
+                "start":           start_sec,
+                "end":             end_sec,
+                "word_timestamps": [],
+            }
+
     return transcriptions
 
 
