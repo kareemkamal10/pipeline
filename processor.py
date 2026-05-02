@@ -262,7 +262,7 @@ def _run_demucs(wav_path: Path, out_path: Path) -> Path:
 
 def _segment_by_silence(audio_path: Path, sr=44100,
                         top_db=40, hop_length=512,
-                        merge_gap_sec=1.5) -> list:
+                        merge_gap_sec=3.0) -> list:
     """
     تقسيم الصوت عند الصمت الطويل فقط.
 
