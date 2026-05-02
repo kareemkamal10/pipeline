@@ -131,14 +131,43 @@ def is_diacritized(text: str, threshold: float = 0.15) -> bool:
 
 # ── الدالة الرئيسية ───────────────────────────────────────────────────────────
 
+def _load_metadata(metadata_file: Path) -> dict:
+    """تحميل tts_metadata.json وبناء فهرس سريع segment_key → index"""
+    if not metadata_file.exists():
+        return {"data": None, "index": {}}
+    with open(metadata_file, encoding="utf-8") as f:
+        data = json.load(f)
+    index = {}
+    for i, sample in enumerate(data.get("samples", [])):
+        key = f"{sample['video_id']}_{sample['segment_id']:03d}"
+        index[key] = i
+    return {"data": data, "index": index}
+
+
+def _sync_metadata(metadata_file: Path, segment_key: str,
+                   new_text: str, metadata_cache: dict) -> None:
+    """
+    تحديث حقل text في tts_metadata.json للمقطع المحدد.
+    word_timestamps تبقى كما هي — التشكيل يغير النص فقط لا التوقيت.
+    """
+    if metadata_cache["data"] is None:
+        return
+    idx = metadata_cache["index"].get(segment_key)
+    if idx is None:
+        return
+    metadata_cache["data"]["samples"][idx]["text"] = new_text
+
+
 def run(data_dir: str = "data", auto_yes: bool = False):
     """
     المسار الكامل:
     1. معاينة (dry-run) على عينة من الملفات
     2. طلب تأكيد من المستخدم
-    3. معالجة وحفظ جميع الملفات (no-resume — يُعيد معالجة كل شيء)
+    3. معالجة وحفظ الملفات النصية + تحديث tts_metadata.json بالتزامن
     """
-    transcripts_dir = Path(data_dir) / "transcripts"
+    data_path       = Path(data_dir)
+    transcripts_dir = data_path / "transcripts"
+    metadata_file   = data_path / "metadata" / "tts_metadata.json"
 
     if not transcripts_dir.exists():
         print(f"✗ المجلد غير موجود: {transcripts_dir}")
@@ -150,6 +179,14 @@ def run(data_dir: str = "data", auto_yes: bool = False):
     if not txt_files:
         print("✗ لا توجد ملفات نصية في transcripts/")
         return
+
+    # تحميل metadata مرة واحدة في الذاكرة
+    metadata_cache = _load_metadata(metadata_file)
+    has_metadata   = metadata_cache["data"] is not None
+    if has_metadata:
+        print(f"  ✔ tts_metadata.json محمّل ({len(metadata_cache['index'])} مقطع)")
+    else:
+        print(f"  ⚠ tts_metadata.json غير موجود — سيتم تحديث ملفات .txt فقط")
 
     print(f"\n▶ تشكيل النصوص — {GEMINI_MODEL}")
     print(f"  الملفات: {len(txt_files)}")
@@ -168,8 +205,7 @@ def run(data_dir: str = "data", auto_yes: bool = False):
     print(f"  معاينة على {PREVIEW_SAMPLE_COUNT} ملفات قبل الحفظ")
     print("━" * 55)
 
-    sample_files = txt_files[:PREVIEW_SAMPLE_COUNT]
-    for f in sample_files:
+    for f in txt_files[:PREVIEW_SAMPLE_COUNT]:
         text = f.read_text(encoding="utf-8").strip()
         if not text:
             continue
@@ -196,8 +232,10 @@ def run(data_dir: str = "data", auto_yes: bool = False):
     stats = {"processed": 0, "unchanged": 0, "failed": 0}
 
     for i, txt_file in enumerate(txt_files, 1):
-        text = txt_file.read_text(encoding="utf-8").strip()
-        prefix = f"  [{i:04d}/{len(txt_files)}] {txt_file.name}"
+        # segment_key = VIDEO_ID_012 (بدون .txt)
+        segment_key = txt_file.stem
+        text        = txt_file.read_text(encoding="utf-8").strip()
+        prefix      = f"  [{i:04d}/{len(txt_files)}] {txt_file.name}"
 
         if not text:
             continue
@@ -210,22 +248,40 @@ def run(data_dir: str = "data", auto_yes: bool = False):
         elif result == text:
             stats["unchanged"] += 1
         else:
-            # نسخة احتياطية
+            # 1. نسخة احتياطية للملف النصي
             backup = txt_file.with_suffix(BACKUP_SUFFIX)
             if not backup.exists():
                 backup.write_text(text, encoding="utf-8")
+
+            # 2. تحديث الملف النصي
             txt_file.write_text(result, encoding="utf-8")
+
+            # 3. تحديث حقل text في metadata (في الذاكرة)
+            _sync_metadata(metadata_file, segment_key, result, metadata_cache)
+
             print(f"{prefix} — ✔")
             stats["processed"] += 1
 
         if i < len(txt_files):
             time.sleep(DELAY_BETWEEN_REQUESTS)
 
+    # ── حفظ metadata المحدَّث ─────────────────────────────────────────────────
+    if has_metadata and stats["processed"] > 0:
+        # نسخة احتياطية لـ metadata
+        metadata_backup = metadata_file.with_suffix(".json.orig")
+        if not metadata_backup.exists():
+            import shutil
+            shutil.copy2(metadata_file, metadata_backup)
+
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata_cache["data"], f, ensure_ascii=False, indent=2)
+        print(f"\n  ✔ tts_metadata.json مُحدَّث بالنصوص المشكّلة")
+
     print(f"\n✔ اكتمل التشكيل!")
     print(f"   تم تشكيله : {stats['processed']}")
     print(f"   لم يتغير  : {stats['unchanged']}")
     print(f"   فشل       : {stats['failed']}")
-    print(f"   النسخ الاحتياطية محفوظة بامتداد: {BACKUP_SUFFIX}")
+    print(f"   النسخ الاحتياطية: .orig و tts_metadata.json.orig")
 
 
 # ── نقطة الدخول ───────────────────────────────────────────────────────────────
