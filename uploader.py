@@ -9,27 +9,58 @@ import yaml
 from pathlib import Path
 
 
+def _check_kaggle_auth() -> bool:
+    """التحقق من إعداد Kaggle CLI قبل محاولة الرفع"""
+    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
+    if not kaggle_json.exists():
+        print("\n✗ Kaggle CLI غير مُعدَّة.")
+        print("  لإعدادها:")
+        print("  1. اذهب إلى https://www.kaggle.com/settings")
+        print("  2. قسم API → اضغط Create New Token")
+        print("  3. سيتم تحميل ملف kaggle.json")
+        print("  4. نفّذ الأوامر التالية:")
+        print("       mkdir -p ~/.kaggle")
+        print("       cp kaggle.json ~/.kaggle/kaggle.json")
+        print("       chmod 600 ~/.kaggle/kaggle.json")
+        return False
+
+    result = subprocess.run(
+        ["kaggle", "datasets", "list", "--mine", "--max-size", "1"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print("\n✗ Kaggle CLI موجودة لكن المصادقة فشلت.")
+        print(f"  الخطأ: {result.stderr.strip()}")
+        print("  تأكد أن ~/.kaggle/kaggle.json يحتوي بيانات صحيحة.")
+        return False
+
+    return True
+
+
 def upload_datasets(config_path: str = "config.yaml", data_dir: str = "data"):
     """
     رفع Datasets إلى Kaggle بناءً على config.yaml
     - datasetTTS: يحتوي vocals + transcripts + metadata
     - datasetLLM: يحتوي fulltranscripts
     """
+    if not _check_kaggle_auth():
+        return
+
     config_file = Path(config_path)
     if not config_file.exists():
         print(f"✗ ملف config {config_path} غير موجود")
         return
-    
+
     with open(config_file, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    
+
     dataset_tts_name = config.get("dataset_tts_name")
     dataset_llm_name = config.get("dataset_llm_name")
-    
+
     if not dataset_tts_name or not dataset_llm_name:
         print("✗ لم يتم العثور على dataset_tts_name أو dataset_llm_name في config.yaml")
         return
-    
+
     data_path = Path(data_dir)
     
     # 1. رفع TTS Dataset
