@@ -25,10 +25,46 @@ def read_links_and_excludes(csv_path):
             result.append((url, excludes))
     return result
 
-def get_playlist_video_ids(playlist_url):
+def _is_single_video(url: str) -> bool:
+    """هل الرابط فيديو مفرد أم قائمة تشغيل؟"""
+    return (
+        ("watch?v=" in url or "youtu.be/" in url)
+        and "list=" not in url
+    )
+
+
+def _extract_video_id(url: str):
+    """استخراج video_id من رابط فيديو مفرد"""
+    if "youtu.be/" in url:
+        return url.split("youtu.be/")[-1].split("?")[0].strip()
+    if "watch?v=" in url:
+        return url.split("watch?v=")[-1].split("&")[0].strip()
+    return None
+
+
+def get_playlist_video_ids(url, exclude_ids=None):
     """
-    Returns a list of (video_id, video_url) for the playlist_url using yt_dlp
+    استخراج الفيديوهات من:
+    - قائمة تشغيل كاملة  (playlist?list=...)
+    - فيديو مفرد         (watch?v=... أو youtu.be/...)
+    مع استثناء المحددة في exclude_ids
     """
+    if exclude_ids is None:
+        exclude_ids = set()
+
+    # ── فيديو مفرد ───────────────────────────────────────────
+    if _is_single_video(url):
+        vid = _extract_video_id(url)
+        if not vid:
+            print(f"  ✗ لم يتم استخراج video_id من: {url}")
+            return []
+        if vid in exclude_ids:
+            print(f"  ↩ فيديو مستثنى: {vid}")
+            return []
+        print(f"  ✔ فيديو مفرد: {vid}")
+        return [(vid, f"https://www.youtube.com/watch?v={vid}")]
+
+    # ── قائمة تشغيل ──────────────────────────────────────────
     ydl_opts = {
         'quiet': True,
         'extract_flat': True,
@@ -36,13 +72,12 @@ def get_playlist_video_ids(playlist_url):
         'force_generic_extractor': False,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(playlist_url, download=False)
+        info = ydl.extract_info(url, download=False)
         entries = info.get('entries', [])
         videos = []
         for entry in entries:
             vid = entry.get('id')
-            url = entry.get('url')
-            if vid and url:
+            if vid and vid not in exclude_ids:
                 videos.append((vid, f"https://www.youtube.com/watch?v={vid}"))
         return videos
 
@@ -112,14 +147,10 @@ def download_from_csv(csv_path, out_dir="data/raw_audio"):
         print("✗ لم يتم العثور على روابط في الملف!")
         return
 
-    for playlist_url, excludes in all_links:
-        print(f"\n=== معالجة قائمة التشغيل: {playlist_url}")
-        videos = get_playlist_video_ids(playlist_url)
-        found_ids = set(vid for vid, _ in videos)
-
-        for ex in excludes:
-            if ex not in found_ids:
-                print(f"  ⚠️ لم يتم العثور على الفيديو المستثنى: {ex}")
+    for url, excludes in all_links:
+        label = "فيديو مفرد" if _is_single_video(url) else "قائمة تشغيل"
+        print(f"\n=== معالجة {label}: {url}")
+        videos = get_playlist_video_ids(url, exclude_ids=excludes)
 
         filtered = [(vid, url) for vid, url in videos if vid not in excludes]
         if not filtered:
