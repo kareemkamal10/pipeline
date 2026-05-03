@@ -19,16 +19,18 @@ import os
 import time
 import traceback
 from pathlib import Path
+import config_loader
 
 # ── مسارات المفاتيح ───────────────────────────────────────────────────────────
 
 SECRETS_DIR      = Path(__file__).parent / "secrets"
-CREDENTIALS_JSON = SECRETS_DIR / "CREDENTIALS.json"
+CREDENTIALS_JSON = config_loader.google_credentials()
 
 # ── إعدادات Vertex AI ────────────────────────────────────────────────────────
 
-VERTEX_LOCATION = "us-central1"
-GEMINI_MODEL    = "gemini-2.5-flash"
+_dia_cfg        = config_loader.diacritization()
+VERTEX_LOCATION = _dia_cfg.get("location", "us-central1")
+GEMINI_MODEL    = _dia_cfg.get("model",    "gemini-2.5-flash")
 
 # ── إعدادات المعالجة ──────────────────────────────────────────────────────────
 

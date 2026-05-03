@@ -14,6 +14,7 @@ import torch
 import torchaudio
 import librosa
 import numpy as np
+import config_loader
 
 
 def process_session(base_dir: str = "data"):
@@ -122,7 +123,13 @@ def process_session(base_dir: str = "data"):
         try:
             # الخطوة 2: تقسيم عند التوقفات
             print(f"  ▶ تقسيم الصوت عند التوقفات...")
-            segments = _segment_by_silence(isolated_audio)
+            seg_cfg  = config_loader.segmentation()
+            segments = _segment_by_silence(
+                isolated_audio,
+                merge_gap_sec   = seg_cfg.get("merge_gap_sec",   3.0),
+                min_segment_sec = seg_cfg.get("min_segment_sec", 1.0),
+                max_segment_sec = seg_cfg.get("max_segment_sec", 35.0),
+            )
             if not segments:
                 print(f"  ⚠ لم يتم العثور على مقاطع صوتية")
                 failed_videos.append(video_id)
@@ -319,7 +326,7 @@ def _segment_by_silence(audio_path: Path, sr=44100,
                     segments.append((round(chunk_start, 3), round(chunk_end, 3)))
 
         # ── الخطوة 3: فلترة المقاطع القصيرة جداً ────────────────────────────
-        segments = [(s, e) for s, e in segments if e - s >= 1.0]
+        segments = [(s, e) for s, e in segments if e - s >= min_segment_sec]
 
         if not segments:
             print(f"    ⚠ لم يتبقَّ أي مقطع بعد الفلترة، استخدام Fallback (30ث)")

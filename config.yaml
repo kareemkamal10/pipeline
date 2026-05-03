@@ -1,13 +1,41 @@
-# config.yaml — إعدادات الـ Datasets للجلسة الحالية
-# تحديد أسماء الـ Datasets على Kaggle
+# ═══════════════════════════════════════════════════════════
+#  History Lab Pipeline — الإعدادات المركزية
+# ═══════════════════════════════════════════════════════════
 
-# TTS Dataset: يحتوي على vocals + transcripts + metadata
-dataset_tts_name: "test-tts-v1"
+# ── اسم الجلسة ───────────────────────────────────────────
+# يُستخدم كاسم موحد لكل شيء: dataset TTS، dataset LLM، ومجلدات الإخراج
+# يجب أن يكون فريداً لكل جلسة تسجيل
+session_name: "history-lab-v1"
 
-# LLM Dataset: يحتوي على fulltranscripts فقط
-dataset_llm_name: "test-llm-v1"
+# ── المسارات ─────────────────────────────────────────────
+paths:
+  data_dir:           "data"
+  kaggle_credentials: "secrets/kaggle.json"
+  google_credentials: "secrets/CREDENTIALS.json"
 
-# ملاحظات:
-# - لو كان الاسم جديد: سيتم إنشاء dataset جديد
-# - لو كان موجود: سيتم تحديث الـ dataset الموجود
-# - احرص على استخدام أسماء مختلفة لكل جلسة أو حدّث الأسماء نفسها
+# ── إعدادات التقسيم الصوتي ───────────────────────────────
+segmentation:
+  # الصمت الأقصر من هذه القيمة يُدمج (توقف طبيعي بين الكلام)
+  # الصمت الأطول منها يُعدّ نقطة قطع (مكان موسيقى محذوفة)
+  merge_gap_sec:    3.0
+
+  # الحد الأدنى لطول المقطع — ما دونه يُحذف (ضوضاء متبقية)
+  min_segment_sec:  1.0
+
+  # الحد الأقصى لطول المقطع — ما فوقه يُقسَّم تلقائياً
+  max_segment_sec:  35.0
+
+# ── إعدادات التشكيل (Gemini / Vertex AI) ────────────────
+diacritization:
+  # تلقائي: يعمل مباشرة بعد المعالجة ضمن run_pipeline.sh
+  # يدوي:   يتطلب تشغيل `python diacritize.py` بشكل منفصل
+  auto: false
+
+  model:    "gemini-2.5-flash"
+  location: "us-central1"
+
+# ── إعدادات الرفع (Kaggle) ───────────────────────────────
+upload:
+  # تلقائي: يعمل مباشرة بعد المعالجة (أو التشكيل إن كان مفعّلاً)
+  # يدوي:   يتطلب تشغيل `python main.py upload` بشكل منفصل
+  auto: false

@@ -16,7 +16,7 @@ def _get_kaggle_username() -> str:
 
 
 SECRETS_DIR = Path(__file__).parent / "secrets"
-KAGGLE_JSON  = SECRETS_DIR / "kaggle.json"
+KAGGLE_JSON  = config_loader.kaggle_credentials()
 
 
 def _check_kaggle_auth() -> bool:
@@ -53,22 +53,10 @@ def upload_datasets(config_path: str = "config.yaml", data_dir: str = "data"):
     if not _check_kaggle_auth():
         return
 
-    config_file = Path(config_path)
-    if not config_file.exists():
-        print(f"✗ ملف config {config_path} غير موجود")
-        return
-
-    with open(config_file, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    dataset_tts_name = config.get("dataset_tts_name")
-    dataset_llm_name = config.get("dataset_llm_name")
-
-    if not dataset_tts_name or not dataset_llm_name:
-        print("✗ لم يتم العثور على dataset_tts_name أو dataset_llm_name في config.yaml")
-        return
-
-    data_path = Path(data_dir)
+    config = config_loader.load()
+    dataset_tts_name = config_loader.tts_dataset_name()
+    dataset_llm_name = config_loader.llm_dataset_name()
+    data_path        = config_loader.data_dir()
     
     # 1. رفع TTS Dataset
     print(f"\n▶ رفع TTS Dataset: {dataset_tts_name}")
