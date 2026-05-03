@@ -1,6 +1,7 @@
 # History Lab Pipeline 🎙️
 
-معالجة تلقائية للمحتوى الصوتي — تحميل، تنقية، تشكيل، ورفع.
+Pipeline متكامل لبناء dataset عربي عالي الجودة لتدريب نماذج TTS —
+من تحميل الصوت من YouTube حتى الرفع على Kaggle.
 
 ---
 
@@ -8,48 +9,41 @@
 
 ```
 pipeline/
-├── secrets/                  ← مفاتيح API (لا تُرفع على GitHub)
-│   ├── CREDENTIALS.json      ← Google Cloud (Vertex AI / Gemini)
-│   └── kaggle.json           ← Kaggle API
-├── data/                     ← البيانات (لا تُرفع على GitHub)
-│   ├── raw_audio/
-│   ├── vocals/
-│   ├── transcripts/
-│   ├── fulltranscripts/
-│   └── metadata/
-├── main.py
-├── processor.py
-├── downloader.py
-├── uploader.py
-├── diacritize.py             ← خدمة التشكيل (مستقلة)
-├── run_pipeline.sh           ← تشغيل كامل بأمر واحد
-├── playLinks.csv
-└── config.yaml
+├── secrets/                   ← مفاتيح API (محمية من GitHub)
+│   ├── CREDENTIALS.json       ← Google Cloud / Vertex AI
+│   └── kaggle.json            ← Kaggle API
+├── data/                      ← البيانات (لا تُرفع على GitHub)
+│   ├── raw_audio/             ← WAV خام بعد التحميل
+│   ├── vocals/                ← مقاطع منقّاة بعد Demucs
+│   ├── transcripts/           ← نص كل مقطع (.txt + .orig)
+│   ├── fulltranscripts/       ← النص الكامل لكل فيديو
+│   └── metadata/              ← tts_metadata.json
+├── main.py                    ← نقطة الدخول الرئيسية
+├── downloader.py              ← المرحلة 1: التحميل
+├── processor.py               ← المرحلة 2: المعالجة
+├── uploader.py                ← المرحلة 4: الرفع
+├── diacritize.py              ← المرحلة 3: التشكيل (مستقلة)
+├── run_pipeline.sh            ← تشغيل كامل بأمر واحد
+├── playLinks.csv              ← روابط قوائم التشغيل
+└── config.yaml                ← أسماء Datasets على Kaggle
 ```
 
 ---
 
-## الإعداد الأولي (مرة واحدة فقط)
-
-### 1. تثبيت المكتبات
+## الإعداد الأولي (مرة واحدة)
 
 ```bash
 pip install -r requirements.txt
 apt install ffmpeg -y
-```
-
-### 2. إعداد المفاتيح
-
-```bash
 mkdir -p secrets
 ```
 
-**Kaggle** — من https://www.kaggle.com/settings → API → Create New Token:
+**Kaggle** ← من https://www.kaggle.com/settings → API → Create New Token:
 ```bash
 cp /path/to/kaggle.json secrets/kaggle.json
 ```
 
-**Google Cloud (Vertex AI)** — من Google Cloud Console:
+**Google Cloud** ← من Google Cloud Console → Service Accounts:
 ```bash
 cp /path/to/your-key.json secrets/CREDENTIALS.json
 ```
@@ -62,125 +56,144 @@ cp /path/to/your-key.json secrets/CREDENTIALS.json
 bash run_pipeline.sh
 ```
 
-### خيارات التشغيل
-
-```bash
-bash run_pipeline.sh                        # كامل (تحميل + معالجة + تشكيل + رفع)
-bash run_pipeline.sh --skip-diacritize      # بدون خطوة التشكيل
-bash run_pipeline.sh --skip-upload          # بدون رفع إلى Kaggle
-bash run_pipeline.sh mylinks.csv            # استخدام ملف CSV مخصص
-```
+| الخيار | الوصف |
+|--------|-------|
+| `bash run_pipeline.sh` | كامل — تحميل + معالجة + تشكيل + رفع |
+| `bash run_pipeline.sh --skip-diacritize` | بدون خطوة التشكيل |
+| `bash run_pipeline.sh --skip-upload` | بدون رفع Kaggle |
+| `bash run_pipeline.sh mylinks.csv` | ملف CSV مخصص |
 
 ---
 
 ## التشغيل اليدوي مرحلة بمرحلة
 
-### المرحلة 1 — التحميل (CPU، بدون GPU)
-
-حضّر ملف `playLinks.csv`:
-```csv
-https://www.youtube.com/playlist?list=PL8I2WxsMdus-YeZzTX6JZP7q8gLBfDgxa
-https://www.youtube.com/playlist?list=PLxxxxxxxxxxxxxxxxxx,VIDEO_ID_1,VIDEO_ID_2
-```
-- العمود الأول: رابط قائمة التشغيل
-- الأعمدة المتبقية: معرفات الفيديوهات المستثناة (اختياري)
+### المرحلة 1 — التحميل (CPU)
 
 ```bash
 python main.py download playLinks.csv
 ```
 
-- يحمّل الصوت فقط كـ WAV بجودة 44100Hz أحادي القناة
-- يحفظ الملفات في `data/raw_audio/`
-- يتجاوز الفيديوهات المحملة مسبقاً تلقائياً
+صيغة `playLinks.csv`:
+```csv
+https://www.youtube.com/playlist?list=PLAYLIST_ID
+https://www.youtube.com/playlist?list=PLAYLIST_ID,VIDEO_TO_EXCLUDE_1,VIDEO_TO_EXCLUDE_2
+```
+
+- يحمّل الصوت فقط كـ WAV أحادي القناة 44100Hz
+- يحفظ في `data/raw_audio/`
+- **يتجاوز الفيديوهات المحملة مسبقاً تلقائياً**
 
 ---
 
-### المرحلة 2 — المعالجة (GPU مطلوب)
+### المرحلة 2 — المعالجة (GPU مطلوب — L40s موصى به)
 
 ```bash
 python main.py process
 ```
 
-- يعزل صوت المتكلم بـ **Demucs htdemucs_ft** (إزالة الموسيقى والضوضاء)
-- يُقسّم الصوت عند التوقفات الطويلة فقط (الصمت القصير بين الكلام يُدمج)
-- ينسخ كل مقطع بـ **WhisperX large-v3** (عربي)
-- يدعم الاستئناف — يتجاوز الملفات المعالجة مسبقاً تلقائياً
+ما يحدث بالترتيب:
+1. **Demucs htdemucs_ft** — عزل صوت المتكلم وحذف الموسيقى والضوضاء
+2. **التقسيم** — قطع عند الصمت الطويل فقط (> 3 ثوانٍ)، دمج التوقفات القصيرة داخل الكلام، استهداف 20-35 ثانية لكل مقطع
+3. **WhisperX large-v3** — تفريغ نصي مع حفظ timestamps الكلمات
+4. **tts_metadata.json** — ملف موحد يحتوي كل المقاطع مع timestamps
 
 الناتج:
 ```
-data/vocals/          ← مقاطع صوتية منقّاة
-data/transcripts/     ← نص لكل مقطع
-data/fulltranscripts/ ← النص الكامل لكل فيديو
-data/metadata/        ← tts_metadata.json
+data/vocals/VIDEO_ID_000.wav        ← مقطع صوتي منقّى (20-35 ث)
+data/transcripts/VIDEO_ID_000.txt   ← نص المقطع
+data/fulltranscripts/VIDEO_ID.txt   ← النص الكامل للفيديو
+data/metadata/tts_metadata.json     ← metadata موحد (انظر البنية أدناه)
 ```
+
+**يدعم الاستئناف** — يتجاوز الملفات المعالجة مسبقاً
 
 ---
 
-### المرحلة 3 — تشكيل النصوص (اختياري — لضمان دقة النطق)
+### المرحلة 3 — التشكيل (CPU — اختياري لكن موصى به)
 
-> **هذه المرحلة اختيارية** — تُحسّن جودة بيانات التدريب بإضافة الحركات للنصوص
-> مما يضمن ربطاً دقيقاً بين النص المكتوب والصوت المسموع عند التدريب.
+> تُحسّن جودة التدريب بإضافة الحركات للنصوص العربية.
+> تضمن تطابقاً دقيقاً بين النص المكتوب والصوت المسموع.
 
 ```bash
 python diacritize.py
 ```
 
-- يعرض معاينة على عينة من الملفات أولاً
-- يطلب تأكيداً قبل الحفظ الفعلي
-- يُعيد معالجة جميع الملفات (بما فيها المشكّلة سابقاً)
-- يحفظ نسخة احتياطية من كل ملف بامتداد `.orig` قبل أي تعديل
-- يتطلب `secrets/CREDENTIALS.json`
+المسار:
+1. تعرض معاينة على 3 ملفات (قبل/بعد) للتحقق
+2. تطلب تأكيداً قبل الحفظ
+3. تُشكّل جميع الملفات وتحفظها
+4. **تُحدّث `tts_metadata.json` بالتزامن** — حقل `text` في كل مقطع يُحدَّث بالنص المشكّل، `word_timestamps` تبقى كما هي
 
-للحفظ المباشر بدون تأكيد:
+النسخ الاحتياطية:
+```
+transcripts/VIDEO_ID_000.orig        ← النص الأصلي قبل التشكيل
+metadata/tts_metadata.json.orig      ← metadata قبل التشكيل
+```
+
+للتشغيل بدون تأكيد (داخل scripts):
 ```bash
 python diacritize.py --yes
 ```
+
+يتطلب: `secrets/CREDENTIALS.json`
 
 ---
 
 ### المرحلة 4 — الرفع إلى Kaggle (CPU)
 
-حضّر `config.yaml`:
+```bash
+python main.py upload
+```
+
+اضبط `config.yaml` أولاً:
 ```yaml
 dataset_tts_name: "history-lab-tts-v1"
 dataset_llm_name: "history-lab-llm-v1"
 ```
 
-```bash
-python main.py upload
-```
-
-- يرفع **TTS Dataset**: vocals + transcripts + metadata
+- يرفع **TTS Dataset**: vocals + transcripts + tts_metadata.json
 - يرفع **LLM Dataset**: fulltranscripts فقط
 - ينشئ dataset جديد أو يُحدّث الموجود تلقائياً
-- يتطلب `secrets/kaggle.json`
+
+يتطلب: `secrets/kaggle.json`
 
 ---
 
-## هيكل البيانات الكامل
+## بنية tts_metadata.json
 
-```
-data/
-├── raw_audio/
-│   └── VIDEO_ID.wav
-├── vocals/
-│   ├── VIDEO_ID_000.wav    ← مقطع صوتي منقّى
-│   └── ...
-├── transcripts/
-│   ├── VIDEO_ID_000.txt    ← نص كل مقطع (مشكّل بعد diacritize)
-│   ├── VIDEO_ID_000.orig   ← نسخة أصلية قبل التشكيل
-│   └── ...
-├── fulltranscripts/
-│   └── VIDEO_ID.txt        ← النص الكامل للفيديو
-└── metadata/
-    └── tts_metadata.json   ← metadata موحد
+```json
+{
+  "dataset_name": "history_lab_tts",
+  "total_samples": 312,
+  "total_hours": 1.8,
+  "samples": [
+    {
+      "video_id":        "AFlCRe-aU7w",
+      "segment_id":      12,
+      "audio_file":      "vocals/AFlCRe-aU7w_012.wav",
+      "text_file":       "transcripts/AFlCRe-aU7w_012.txt",
+      "duration_seconds": 28.4,
+      "file_size_bytes": 2503680,
+      "text":            "وَجَدَ الأَسَدُ فَرِيسَتَهُ عِندَ مَوْرِدِ المَاءِ",
+      "word_timestamps": [
+        {"word": "وَجَدَ",    "start": 0.0,  "end": 0.42, "score": 0.99},
+        {"word": "الأَسَدُ", "start": 0.50, "end": 1.10, "score": 0.97}
+      ]
+    }
+  ]
+}
 ```
 
 ---
 
-## ملاحظات
+## ملاحظات تشغيلية
 
-- **المراحل 1 و 3 و 4** لا تحتاج GPU — شغّلها على CPU لتوفير الرصيد
-- **المرحلة 2** تحتاج GPU (L40s أو A100 موصى به)
-- جميع المراحل تدعم الاستئناف — لن يُعاد معالجة ما تم مسبقاً
-- مجلد `secrets/` مُدرج في `.gitignore` ولن يُرفع على GitHub أبداً
+| المرحلة | GPU | الاستئناف | المفاتيح المطلوبة |
+|---------|-----|-----------|------------------|
+| التحميل | ❌ | ✅ | — |
+| المعالجة | ✅ L40s | ✅ | — |
+| التشكيل | ❌ | ✅ | CREDENTIALS.json |
+| الرفع | ❌ | — | kaggle.json |
+
+- مجلد `secrets/` في `.gitignore` — لن يُرفع على GitHub أبداً
+- مجلد `data/` في `.gitignore` — احتفظ بنسخة محلية أو على Kaggle
