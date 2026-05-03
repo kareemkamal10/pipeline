@@ -21,11 +21,12 @@ pipeline/
 ├── main.py                    ← نقطة الدخول الرئيسية
 ├── downloader.py              ← المرحلة 1: التحميل
 ├── processor.py               ← المرحلة 2: المعالجة
-├── uploader.py                ← المرحلة 4: الرفع
 ├── diacritize.py              ← المرحلة 3: التشكيل (مستقلة)
+├── uploader.py                ← المرحلة 4: الرفع
+├── config_loader.py           ← قراءة مركزية لـ config.yaml
 ├── run_pipeline.sh            ← تشغيل كامل بأمر واحد
-├── playLinks.csv              ← روابط قوائم التشغيل
-└── config.yaml                ← أسماء Datasets على Kaggle
+├── config.yaml                ← جميع الإعدادات من مكان واحد
+└── playLinks.csv              ← روابط قوائم التشغيل
 ```
 
 ---
@@ -50,6 +51,65 @@ cp /path/to/your-key.json secrets/CREDENTIALS.json
 
 ---
 
+## config.yaml — إدارة كل الإعدادات من مكان واحد
+
+هذا هو الملف الوحيد الذي تحتاج تعديله بين الجلسات:
+
+```yaml
+# ── اسم الجلسة ──────────────────────────────────────────
+# يُستخدم كاسم موحد لكل شيء:
+#   - dataset TTS على Kaggle  →  session_name-tts
+#   - dataset LLM على Kaggle  →  session_name-llm
+# غيّره لكل جلسة تسجيل جديدة
+session_name: "history-lab-v1"
+
+# ── مسارات المفاتيح ──────────────────────────────────────
+paths:
+  data_dir:           "data"
+  kaggle_credentials: "secrets/kaggle.json"
+  google_credentials: "secrets/CREDENTIALS.json"
+
+# ── إعدادات التقسيم الصوتي ──────────────────────────────
+segmentation:
+  merge_gap_sec:    3.0   # صمت أقصر → دمج | أطول → قطع
+  min_segment_sec:  1.0   # مقاطع أقصر من هذا تُحذف (ضوضاء)
+  max_segment_sec:  35.0  # مقاطع أطول من هذا تُقسَّم تلقائياً
+
+# ── إعدادات التشكيل ──────────────────────────────────────
+diacritization:
+  auto:     false           # true = يعمل تلقائياً بعد المعالجة
+  model:    "gemini-2.5-flash"
+  location: "us-central1"
+
+# ── إعدادات الرفع ────────────────────────────────────────
+upload:
+  auto: false               # true = يُرفع تلقائياً بعد الانتهاء
+```
+
+### شرح الإعدادات
+
+**`session_name`**
+الاسم الفريد للجلسة — يُشتق منه تلقائياً اسما الـ datasets على Kaggle.
+مثال: `history-lab-v1` → ينشئ `history-lab-v1-tts` و `history-lab-v1-llm`.
+
+**`segmentation`**
+
+| الإعداد | الوصف | القيمة الافتراضية |
+|---------|-------|-----------------|
+| `merge_gap_sec` | صمت أقل من هذا يُدمج (توقف طبيعي بين الجمل) — أكثر منه يُعدّ نقطة قطع (مكان موسيقى محذوفة) | `3.0` ث |
+| `min_segment_sec` | المقاطع الأقصر من هذا تُحذف (ضوضاء متبقية بعد Demucs) | `1.0` ث |
+| `max_segment_sec` | المقاطع الأطول من هذا تُقسَّم تلقائياً بالتساوي | `35.0` ث |
+
+**`diacritization.auto`**
+- `false` (افتراضي): يجب تشغيل `python diacritize.py` يدوياً
+- `true`: يعمل تلقائياً ضمن `bash run_pipeline.sh` بعد المعالجة
+
+**`upload.auto`**
+- `false` (افتراضي): يجب تشغيل `python main.py upload` يدوياً
+- `true`: يعمل تلقائياً ضمن `bash run_pipeline.sh` بعد الانتهاء
+
+---
+
 ## التشغيل الكامل بأمر واحد
 
 ```bash
@@ -58,10 +118,20 @@ bash run_pipeline.sh
 
 | الخيار | الوصف |
 |--------|-------|
-| `bash run_pipeline.sh` | كامل — تحميل + معالجة + تشكيل + رفع |
-| `bash run_pipeline.sh --skip-diacritize` | بدون خطوة التشكيل |
-| `bash run_pipeline.sh --skip-upload` | بدون رفع Kaggle |
+| `bash run_pipeline.sh` | يعمل حسب إعدادات config.yaml |
+| `bash run_pipeline.sh --skip-diacritize` | يتجاوز التشكيل بغض النظر عن config |
+| `bash run_pipeline.sh --skip-upload` | يتجاوز الرفع بغض النظر عن config |
 | `bash run_pipeline.sh mylinks.csv` | ملف CSV مخصص |
+
+عند التشغيل يُطبع ملخص الإعدادات الحالية:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  History Lab Pipeline
+  الجلسة  : history-lab-v1
+  التشكيل : يدوي
+  الرفع   : يدوي
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
 
 ---
 
@@ -76,12 +146,12 @@ python main.py download playLinks.csv
 صيغة `playLinks.csv`:
 ```csv
 https://www.youtube.com/playlist?list=PLAYLIST_ID
-https://www.youtube.com/playlist?list=PLAYLIST_ID,VIDEO_TO_EXCLUDE_1,VIDEO_TO_EXCLUDE_2
+https://www.youtube.com/playlist?list=PLAYLIST_ID,VIDEO_TO_EXCLUDE
 ```
 
 - يحمّل الصوت فقط كـ WAV أحادي القناة 44100Hz
 - يحفظ في `data/raw_audio/`
-- **يتجاوز الفيديوهات المحملة مسبقاً تلقائياً**
+- يتجاوز الفيديوهات المحملة مسبقاً تلقائياً
 
 ---
 
@@ -93,69 +163,38 @@ python main.py process
 
 ما يحدث بالترتيب:
 1. **Demucs htdemucs_ft** — عزل صوت المتكلم وحذف الموسيقى والضوضاء
-2. **التقسيم** — قطع عند الصمت الطويل فقط (> 3 ثوانٍ)، دمج التوقفات القصيرة داخل الكلام، استهداف 20-35 ثانية لكل مقطع
+2. **التقسيم** — حسب إعدادات `segmentation` في config.yaml
 3. **WhisperX large-v3** — تفريغ نصي مع حفظ timestamps الكلمات
-4. **tts_metadata.json** — ملف موحد يحتوي كل المقاطع مع timestamps
+4. **tts_metadata.json** — ملف موحد لكل المقاطع
 
-الناتج:
-```
-data/vocals/VIDEO_ID_000.wav        ← مقطع صوتي منقّى (20-35 ث)
-data/transcripts/VIDEO_ID_000.txt   ← نص المقطع
-data/fulltranscripts/VIDEO_ID.txt   ← النص الكامل للفيديو
-data/metadata/tts_metadata.json     ← metadata موحد (انظر البنية أدناه)
-```
-
-**يدعم الاستئناف** — يتجاوز الملفات المعالجة مسبقاً
+يدعم الاستئناف — يتجاوز الملفات المعالجة مسبقاً
 
 ---
 
-### المرحلة 3 — التشكيل (CPU — اختياري لكن موصى به)
-
-> تُحسّن جودة التدريب بإضافة الحركات للنصوص العربية.
-> تضمن تطابقاً دقيقاً بين النص المكتوب والصوت المسموع.
+### المرحلة 3 — التشكيل (CPU — اختياري)
 
 ```bash
-python diacritize.py
+python diacritize.py        # معاينة ثم تأكيد ثم حفظ
+python diacritize.py --yes  # حفظ مباشر بدون تأكيد
 ```
 
-المسار:
-1. تعرض معاينة على 3 ملفات (قبل/بعد) للتحقق
-2. تطلب تأكيداً قبل الحفظ
-3. تُشكّل جميع الملفات وتحفظها
-4. **تُحدّث `tts_metadata.json` بالتزامن** — حقل `text` في كل مقطع يُحدَّث بالنص المشكّل، `word_timestamps` تبقى كما هي
-
-النسخ الاحتياطية:
-```
-transcripts/VIDEO_ID_000.orig        ← النص الأصلي قبل التشكيل
-metadata/tts_metadata.json.orig      ← metadata قبل التشكيل
-```
-
-للتشغيل بدون تأكيد (داخل scripts):
-```bash
-python diacritize.py --yes
-```
-
-يتطلب: `secrets/CREDENTIALS.json`
+- يعرض معاينة قبل/بعد على 3 ملفات
+- يُحدّث ملفات `.txt` و `tts_metadata.json` بالتزامن
+- يحفظ نسخ احتياطية `.orig` قبل أي تعديل
+- يتطلب `secrets/CREDENTIALS.json`
 
 ---
 
-### المرحلة 4 — الرفع إلى Kaggle (CPU)
+### المرحلة 4 — الرفع (CPU)
 
 ```bash
 python main.py upload
 ```
 
-اضبط `config.yaml` أولاً:
-```yaml
-dataset_tts_name: "history-lab-tts-v1"
-dataset_llm_name: "history-lab-llm-v1"
-```
-
-- يرفع **TTS Dataset**: vocals + transcripts + tts_metadata.json
-- يرفع **LLM Dataset**: fulltranscripts فقط
+- يرفع **TTS Dataset** (`session_name-tts`): vocals + transcripts + metadata
+- يرفع **LLM Dataset** (`session_name-llm`): fulltranscripts فقط
 - ينشئ dataset جديد أو يُحدّث الموجود تلقائياً
-
-يتطلب: `secrets/kaggle.json`
+- يتطلب `secrets/kaggle.json`
 
 ---
 
@@ -168,13 +207,13 @@ dataset_llm_name: "history-lab-llm-v1"
   "total_hours": 1.8,
   "samples": [
     {
-      "video_id":        "AFlCRe-aU7w",
-      "segment_id":      12,
-      "audio_file":      "vocals/AFlCRe-aU7w_012.wav",
-      "text_file":       "transcripts/AFlCRe-aU7w_012.txt",
+      "video_id":         "AFlCRe-aU7w",
+      "segment_id":       12,
+      "audio_file":       "vocals/AFlCRe-aU7w_012.wav",
+      "text_file":        "transcripts/AFlCRe-aU7w_012.txt",
       "duration_seconds": 28.4,
-      "file_size_bytes": 2503680,
-      "text":            "وَجَدَ الأَسَدُ فَرِيسَتَهُ عِندَ مَوْرِدِ المَاءِ",
+      "file_size_bytes":  2503680,
+      "text":             "وَجَدَ الأَسَدُ فَرِيسَتَهُ عِندَ مَوْرِدِ المَاءِ",
       "word_timestamps": [
         {"word": "وَجَدَ",    "start": 0.0,  "end": 0.42, "score": 0.99},
         {"word": "الأَسَدُ", "start": 0.50, "end": 1.10, "score": 0.97}
@@ -186,14 +225,14 @@ dataset_llm_name: "history-lab-llm-v1"
 
 ---
 
-## ملاحظات تشغيلية
+## جدول المراحل
 
-| المرحلة | GPU | الاستئناف | المفاتيح المطلوبة |
-|---------|-----|-----------|------------------|
+| المرحلة | GPU | استئناف | المفاتيح المطلوبة |
+|---------|-----|---------|------------------|
 | التحميل | ❌ | ✅ | — |
-| المعالجة | ✅ L40s | ✅ | — |
+| المعالجة | ✅ | ✅ | — |
 | التشكيل | ❌ | ✅ | CREDENTIALS.json |
 | الرفع | ❌ | — | kaggle.json |
 
-- مجلد `secrets/` في `.gitignore` — لن يُرفع على GitHub أبداً
-- مجلد `data/` في `.gitignore` — احتفظ بنسخة محلية أو على Kaggle
+- `secrets/` في `.gitignore` — لن يُرفع على GitHub أبداً
+- `data/` في `.gitignore` — احتفظ بنسخة محلية أو على Kaggle
