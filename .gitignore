@@ -14,3 +14,5 @@ __pycache__/
 # مؤقت
 _tmp_download/
 demucs_tmp_*/
+vertex/.env
+vertex/.vms_created
