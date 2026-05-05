@@ -1,0 +1,42 @@
+# ═══════════════════════════════════════════════════════════
+#  config_vertex.yaml — إعدادات Google Cloud
+#  يتحكم في موارد GCP فقط
+#  إعدادات الـ Pipeline (تقسيم، تشكيل، إلخ) تبقى في config.yaml
+# ═══════════════════════════════════════════════════════════
+
+# ── إعدادات GCP الأساسية ─────────────────────────────────
+gcp:
+  region: "us-central1"
+  zone:   "us-central1-a"
+
+# ── إعدادات الـ VM ────────────────────────────────────────
+vm:
+  # نوع الـ GPU
+  # خيارات متاحة على GCP:
+  #   nvidia-l4         → 24GB VRAM  — موصى به للمعالجة   (~$0.70/ساعة)
+  #   nvidia-tesla-t4   → 16GB VRAM  — الأرخص              (~$0.35/ساعة)
+  #   nvidia-tesla-a100 → 40GB VRAM  — للأعباء الثقيلة    (~$2.93/ساعة)
+  gpu_type:  "nvidia-l4"
+  gpu_count: 1
+
+  # نوع الـ Machine (يجب أن يتوافق مع الـ GPU)
+  # nvidia-l4         → g2-standard-4  (4  vCPU, 16GB RAM)
+  #                   → g2-standard-8  (8  vCPU, 32GB RAM) ← موصى به
+  #                   → g2-standard-16 (16 vCPU, 64GB RAM)
+  # nvidia-tesla-t4   → n1-standard-4 / n1-standard-8
+  # nvidia-tesla-a100 → a2-highgpu-1g
+  machine_type: "g2-standard-8"
+
+  # حجم القرص بـ GB
+  # 150 دقيقة صوت خام ≈ 8GB | بعد المعالجة ≈ 20GB | آمن: 100GB
+  disk_size_gb: 100
+
+# ── إعدادات Docker Image ──────────────────────────────────
+docker:
+  repo_name:  "pipeline-repo"
+  image_name: "history-lab-pipeline"
+
+# ── إعدادات GCS Bucket ────────────────────────────────────
+storage:
+  # اتركه فارغاً ليُنشأ تلقائياً كـ {project_id}-pipeline-data
+  bucket_name: ""
